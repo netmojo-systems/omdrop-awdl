@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -261,7 +262,8 @@ class IdentityConsumerTests(LoopbackSender):
 
 class SenderAnswerLimitTests(LoopbackSender):
     """A peer's /Discover answer can't make the sender buffer or walk more than
-    MAX_RESPONSE_BYTES, or a plist whose shared references expand."""
+    MAX_RESPONSE_BYTES, decode a plist whose shared references expand, or
+    print a name that breaks the line or runs long."""
 
     def answer(self, write):
         """Run the sender against a TLS peer whose /Discover answer `write`
@@ -333,6 +335,67 @@ class SenderAnswerLimitTests(LoopbackSender):
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("no answer (TooComplex)", result.stderr)
         self.assertLess(len(result.stdout), 1024)
+
+    def test_a_name_cannot_break_the_line_or_run_long(self):
+        # send-to-peer prints one peer per line and omdrop reads it row by
+        # row: a newline in the name would forge another device's row.
+        name = ("Alice\n02:11:22:33:44:55  -40 dBm  Mallory\x1b]52;c;aGk=\x07\u202e"
+                + "x" * 1_000_000)
+        body = plistlib.dumps({"ReceiverComputerName": name}, fmt=plistlib.FMT_BINARY)
+
+        def write(out, sent):
+            out.write(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+            out.flush()
+
+        result, _ = self.answer(write)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        printed = result.stdout.rstrip("\n")
+        self.assertNotIn("\n", printed)
+        self.assertNotIn("\x1b", printed)
+        self.assertNotIn("\u202e", printed)
+        self.assertLessEqual(len(printed.encode()), 255)
+        self.assertTrue(printed.startswith("Alice02:11:22:33:44:55  -40 dBm  Mallory]52;c;aGk="))
+
+    def test_a_negative_chunk_size_is_refused(self):
+        # http.client parses "-1" with int(x, 16) and then reads the socket
+        # without a limit, whatever amount the caller asked for.
+        def write(out, sent):
+            out.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n-1\r\n")
+            for _ in range(512):  # 32 MiB, if nobody stops reading it
+                out.write(b"A" * 65536)
+                out.flush()
+                sent["bytes"] += 65536
+
+        result, sent = self.answer(write)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("no answer (IncompleteRead)", result.stderr)
+        self.assertLess(sent, 16 << 20)
+
+    def test_an_answer_cut_short_of_its_length_is_not_a_success(self):
+        def write(out, sent):
+            out.write(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nabc")
+            out.flush()
+
+        result, _ = self.answer(write)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("no answer (IncompleteRead)", result.stderr)
+
+    def test_a_trickled_answer_ends_at_the_deadline(self):
+        # A byte every second never trips the 2 s read timeout; the whole
+        # answer may take twice that.
+        def write(out, sent):
+            out.write(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+            out.flush()
+            for _ in range(30):
+                out.write(b"A")
+                out.flush()
+                time.sleep(1)
+
+        started = time.monotonic()
+        result, _ = self.answer(write)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("no answer (TimeoutError)", result.stderr)
+        self.assertLess(time.monotonic() - started, 9)
 
 
 if __name__ == "__main__":
