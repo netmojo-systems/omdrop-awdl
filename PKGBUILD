@@ -129,6 +129,7 @@ package() {
   # above reads instead of carrying a baked-in MAC or hostname.
   install -Dm644 "${startdir}/userspace/awdl_identity.py" "${lib}/awdl_identity.py"
   install -Dm644 "${startdir}/userspace/awdl_debug.py" "${lib}/awdl_debug.py"
+  install -Dm644 "${startdir}/userspace/awdl_plist.py" "${lib}/awdl_plist.py"
 
   install -Dm644 "${startdir}/packaging/org.omarchy.omdrop.policy" \
     "${pkgdir}/usr/share/polkit-1/actions/org.omarchy.omdrop.policy"

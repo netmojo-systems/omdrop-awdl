@@ -5,6 +5,8 @@ import tempfile
 from pathlib import Path
 from xml.parsers.expat import ExpatError
 
+import awdl_plist
+
 
 def _redact(value):
     if isinstance(value, dict):
@@ -43,7 +45,7 @@ def dump_protocol(name, data, *, verbose=False, runtime_dir=None):
         data = b''
     if not sensitive:
         try:
-            value = plistlib.loads(data)
+            value = awdl_plist.loads(data)
         except (ValueError, TypeError, OverflowError, ExpatError):
             data = f'<opaque {len(data)} bytes>'.encode('utf-8')
         else:

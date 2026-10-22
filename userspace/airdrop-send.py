@@ -27,8 +27,9 @@ import sys
 import threading
 import time
 import uuid
-from http.client import HTTPSConnection
+from http.client import HTTPException, HTTPSConnection
 
+import awdl_plist
 from awdl_debug import dump_protocol
 from awdl_identity import IdentityError, resolve_identity
 
@@ -50,6 +51,12 @@ SUPPORTS_DISCOVER = 0x80
 # end of a watched hold -- instead of failing and reporting. A wedged send must
 # cost seconds, not a hold.
 OP_TIMEOUT = 20.0
+
+# Answers are small plists: a Mac's /Discover answer is about 4 KB with its
+# record. The timeout above bounds each read, not the whole body, so a peer
+# that keeps sending could otherwise fill memory; omdrop-core's sender stops
+# at the same size.
+MAX_RESPONSE_BYTES = 4 << 20
 
 class HTTPSConnectionAWDL(HTTPSConnection):
     """HTTPS to a peer on the AWDL interface.
@@ -294,7 +301,15 @@ class AirDropClient:
                                                  context=self.config.get_ssl_context())
         self.http_conn.request('POST', path, body=body, headers={**HEADERS, **(headers or {})})
         resp = self.http_conn.getresponse()
-        data = resp.read()
+        # Read at most one byte past the limit: a peer declares whatever length
+        # it likes, and a chunked or close-delimited body declares none.
+        too_large = resp.length is not None and resp.length > MAX_RESPONSE_BYTES
+        data = b'' if too_large else resp.read(MAX_RESPONSE_BYTES + 1)
+        if too_large or len(data) > MAX_RESPONSE_BYTES:
+            # The rest of the body is unread, so the connection is unusable.
+            self.http_conn.close()
+            self.http_conn = None
+            raise HTTPException(f'{path} answer is larger than {MAX_RESPONSE_BYTES} bytes')
         self.config.dump(f'send_{name}_response.plist', data)
         wire.debug('%s answered %d %s', path, resp.status, resp.reason)
         return resp.status == 200, data
@@ -307,7 +322,9 @@ class AirDropClient:
         if self.config.record_data:
             body['SenderRecordData'] = self.config.record_data
         _, resp = self.post('/Discover', plistlib.dumps(body, fmt=plistlib.FMT_BINARY))
-        pl = plistlib.loads(resp)
+        # Bounded: the name is printed and logged, which would otherwise walk
+        # every shared reference in the answer.
+        pl = awdl_plist.loads(resp)
         log.info('%s DISCOVER response keys: %s', t(), sorted(pl))
         return pl.get('ReceiverComputerName')
 

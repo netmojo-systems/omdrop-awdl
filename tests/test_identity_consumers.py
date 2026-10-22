@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 USERSPACE = ROOT / "userspace"
 
 
-class IdentityConsumerTests(unittest.TestCase):
+class LoopbackSender(unittest.TestCase):
+    """An identity on disk, and the real sender run against a loopback peer."""
     @classmethod
     def setUpClass(cls):
         cls.material = tempfile.TemporaryDirectory()
@@ -100,6 +101,8 @@ with patch('builtins.open', open_file), patch('pwd.getpwuid', return_value=entry
              "--op-timeout", "2", *options],
             env=self.env, capture_output=True, text=True, timeout=10)
 
+
+class IdentityConsumerTests(LoopbackSender):
     def discover(self, *options):
         observed = {}
 
@@ -254,6 +257,82 @@ with patch('builtins.open', open_file), patch('pwd.getpwuid', return_value=entry
             self.assertEqual(packet[11:19], bytes.fromhex("1111aaaa22223333"))
             packet = self.advertise(module, bus, "--hashes-from-record", str(self.home / "absent.cms"))
             self.assertEqual(packet[11:19], bytes(8))
+
+
+class SenderAnswerLimitTests(LoopbackSender):
+    """A peer's /Discover answer can't make the sender buffer or walk more than
+    MAX_RESPONSE_BYTES, or a plist whose shared references expand."""
+
+    def answer(self, write):
+        """Run the sender against a TLS peer whose /Discover answer `write`
+        produces from its socket file. Returns the sender's result and how many
+        bytes the peer managed to send before the sender hung up."""
+        sent = {"bytes": 0}
+
+        class Receiver(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                try:
+                    write(self.wfile, sent)
+                except (BrokenPipeError, ConnectionResetError, ssl.SSLError, OSError):
+                    pass
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Receiver)
+        server.timeout = 5
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(self.keys / "certificate.pem", self.keys / "key.pem")
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        worker = threading.Thread(target=server.handle_request, daemon=True)
+        worker.start()
+        try:
+            result = self.sender(f"127.0.0.1:{server.server_port}")
+            worker.join(10)
+        finally:
+            server.server_close()
+        return result, sent["bytes"]
+
+    def test_an_endless_chunked_answer_is_cut_off_at_the_limit(self):
+        chunk = b"A" * 65536
+
+        def write(out, sent):
+            out.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+            for _ in range(1024):  # 64 MiB, if nobody stops it
+                out.write(b"10000\r\n" + chunk + b"\r\n")
+                out.flush()
+                sent["bytes"] += len(chunk)
+
+        result, sent = self.answer(write)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("no answer (HTTPException)", result.stderr)
+        # The limit is 4 MiB; loopback socket buffers hold a few more.
+        self.assertLess(sent, 32 << 20)
+
+    def test_an_answer_declaring_a_huge_length_is_refused_before_reading(self):
+        def write(out, sent):
+            out.write(b"HTTP/1.1 200 OK\r\nContent-Length: 1073741824\r\n\r\n")
+            out.write(b"A" * 65536)
+            out.flush()
+
+        result, _ = self.answer(write)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("no answer (HTTPException)", result.stderr)
+
+    def test_a_name_whose_references_expand_is_not_printed(self):
+        # About 12 KB on the wire; printed whole, the name is 20 MB.
+        body = plistlib.dumps({"ReceiverComputerName": ["A" * 10_000] * 2000},
+                              fmt=plistlib.FMT_BINARY)
+
+        def write(out, sent):
+            out.write(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+            out.flush()
+
+        result, _ = self.answer(write)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("no answer (TooComplex)", result.stderr)
+        self.assertLess(len(result.stdout), 1024)
 
 
 if __name__ == "__main__":
