@@ -21,14 +21,16 @@ import ipaddress
 import logging
 import os
 import plistlib
+import re
 import socket
 import ssl
 import sys
 import threading
 import time
 import uuid
-from http.client import HTTPSConnection
+from http.client import HTTPException, HTTPResponse, HTTPSConnection, IncompleteRead
 
+import awdl_plist
 from awdl_debug import dump_protocol
 from awdl_identity import IdentityError, resolve_identity
 
@@ -51,6 +53,60 @@ SUPPORTS_DISCOVER = 0x80
 # cost seconds, not a hold.
 OP_TIMEOUT = 20.0
 
+# Answers are small plists: a Mac's /Discover answer is about 4 KB with its
+# record. The timeout above bounds each read, not the whole body, so a peer
+# that keeps sending could otherwise fill memory; omdrop-core's sender stops
+# at the same size.
+MAX_RESPONSE_BYTES = 4 << 20
+
+# A whole answer, from the end of the request to the last byte of its body,
+# may take twice the connection's own timeout: once for the receiver to start
+# answering (a consent prompt, for an Ask), once more to finish. The timeout
+# alone bounds each read, so a peer trickling a byte at a time, or sending
+# 100 Continue answers without end, could otherwise hold a send open
+# indefinitely.
+RESPONSE_TIMEOUTS = 2
+
+# A chunk-size line: hex digits only. http.client takes anything int(x, 16)
+# does, including "-1", which then reaches an unbounded read of the socket
+# whatever limit the caller passed (hume, #10665).
+CHUNK_SIZE = re.compile(rb'[0-9A-Fa-f]{1,16}')
+
+
+class BoundedHTTPResponse(HTTPResponse):
+    """An HTTPResponse that refuses chunk sizes that aren't plain hex."""
+
+    def _read_next_chunk_size(self):
+        line = self.fp.readline(1025)
+        size = line.split(b';', 1)[0].strip()
+        if len(line) > 1024 or not CHUNK_SIZE.fullmatch(size):
+            # Framing is lost: nothing further on this connection is trusted.
+            # http.client turns the ValueError into IncompleteRead.
+            self._close_conn()
+            raise ValueError('invalid chunk size')
+        return int(size, 16)
+
+
+# A peer's name is printed one peer per line by send-to-peer, read row by row
+# by `omdrop`, and shown in terminals and the panel, so it may not carry a line
+# break, a terminal escape or bidi/zero-width tricks, and it may not be
+# megabytes long. The same rule as omdrop-core's sender.
+NAME_UNSAFE = re.compile('[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069'
+                         '\u200b-\u200f\ufeff]')
+MAX_NAME_BYTES = 255
+
+
+def clean_name(name):
+    """The peer's name as safe to print, or None when it offered none."""
+    if isinstance(name, int) and not isinstance(name, bool):
+        name = str(name)
+    if not isinstance(name, str):
+        return None
+    name = NAME_UNSAFE.sub('', name)
+    name = name.encode('utf-8')[:MAX_NAME_BYTES].decode('utf-8', 'ignore').strip()
+    return name or None
+
+
 class HTTPSConnectionAWDL(HTTPSConnection):
     """HTTPS to a peer on the AWDL interface.
 
@@ -66,6 +122,8 @@ class HTTPSConnectionAWDL(HTTPSConnection):
         if timeout is None:
             timeout = OP_TIMEOUT if OP_TIMEOUT else socket.getdefaulttimeout()
         super().__init__(host, port, timeout=timeout, context=context)
+
+    response_class = BoundedHTTPResponse
 
 
 class Config:
@@ -293,11 +351,57 @@ class AirDropClient:
                                                  interface_name=self.config.interface,
                                                  context=self.config.get_ssl_context())
         self.http_conn.request('POST', path, body=body, headers={**HEADERS, **(headers or {})})
-        resp = self.http_conn.getresponse()
-        data = resp.read()
+        sock = self.http_conn.sock
+        expired = threading.Event()
+
+        def expire():
+            # socket.socket's shutdown, not SSLSocket's: it ends a read blocked
+            # in another thread without touching the TLS state that read uses.
+            expired.set()
+            try:
+                socket.socket.shutdown(sock, socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+        seconds = RESPONSE_TIMEOUTS * (sock.gettimeout() or OP_TIMEOUT or 20.0)
+        timer = threading.Timer(seconds, expire)
+        timer.daemon = True
+        timer.start()
+        try:
+            resp = self.http_conn.getresponse()
+            # Read at most one byte past the limit: a peer declares whatever
+            # length it likes, and a chunked or close-delimited body declares
+            # none.
+            too_large = resp.length is not None and resp.length > MAX_RESPONSE_BYTES
+            data = b'' if too_large else resp.read(MAX_RESPONSE_BYTES + 1)
+            # A length-limited read returns what arrived without complaint, so
+            # a body cut short of its Content-Length is checked here.
+            short = not too_large and resp.length is not None and resp.length > 0
+        except Exception:
+            if expired.is_set():
+                self._drop_connection()
+                raise TimeoutError(f'{path} answer took longer than {seconds:.0f} s') from None
+            raise
+        finally:
+            timer.cancel()
+        if expired.is_set():
+            self._drop_connection()
+            raise TimeoutError(f'{path} answer took longer than {seconds:.0f} s')
+        if too_large or len(data) > MAX_RESPONSE_BYTES:
+            # The rest of the body is unread, so the connection is unusable.
+            self._drop_connection()
+            raise HTTPException(f'{path} answer is larger than {MAX_RESPONSE_BYTES} bytes')
+        if short:
+            self._drop_connection()
+            raise IncompleteRead(data, resp.length)
         self.config.dump(f'send_{name}_response.plist', data)
         wire.debug('%s answered %d %s', path, resp.status, resp.reason)
         return resp.status == 200, data
+
+    def _drop_connection(self):
+        if self.http_conn is not None:
+            self.http_conn.close()
+            self.http_conn = None
 
     def send_discover(self):
         """A Mac's /Discover request carries DeviceSupportFlags (and its record
@@ -307,9 +411,11 @@ class AirDropClient:
         if self.config.record_data:
             body['SenderRecordData'] = self.config.record_data
         _, resp = self.post('/Discover', plistlib.dumps(body, fmt=plistlib.FMT_BINARY))
-        pl = plistlib.loads(resp)
+        # Bounded: the name is printed and logged, which would otherwise walk
+        # every shared reference in the answer.
+        pl = awdl_plist.loads(resp)
         log.info('%s DISCOVER response keys: %s', t(), sorted(pl))
-        return pl.get('ReceiverComputerName')
+        return clean_name(pl.get('ReceiverComputerName'))
 
     def send_ask(self, files):
         """OpenDrop's /Ask body predates today's sharingd. A Mac's Ask (captured by
