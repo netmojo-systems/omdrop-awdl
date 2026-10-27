@@ -5,8 +5,8 @@ These three directories are copied verbatim from the Asahi Linux kernel tree. Th
 | | |
 |---|---|
 | Upstream | https://github.com/AsahiLinux/linux |
-| Tag | `asahi-7.1.13-3` |
-| Commit | `94fb23346d522edf53722357c426a3e58030beea` |
+| Tag | `asahi-7.2.12-2` |
+| Commit | `2bb9d16f967f11e533a851b13b148a708d59b4f3` |
 | Paths | `drivers/net/wireless/broadcom/brcm80211/{brcmfmac,brcmutil,include}` |
 | Licence | GPL-2.0-only, as marked in each file |
 
