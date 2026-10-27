@@ -9,10 +9,12 @@
 #
 # A loaded brcmfmac is not necessarily one with AWDL. When the DKMS build
 # fails for a new kernel, nothing is installed for it and the kernel's own
-# brcmfmac loads instead (issue 51). The marker is the awdl_create_flags
-# parameter, which only an AWDL brcmfmac has, whether ours or a kernel's own
-# (dkms.conf.in stands aside for those): in sysfs for the loaded module, from
-# modinfo for the one the running kernel would load.
+# brcmfmac loads instead (issue 51). The marker is a parameter only an AWDL
+# brcmfmac has, whether ours or a kernel's own (dkms.conf.in stands aside for
+# those): awdl_create_flags, or awdl, the on/off switch that replaced it in
+# the series as linux-aurora 7.2 carries it. It is read in sysfs for the
+# loaded module, and from modinfo for the one the running kernel would load.
+# A loaded switch reading 0 is AWDL turned off, not missing.
 #
 # Exit 0: the JSON object on stdout.
 #      2: usage.
@@ -40,8 +42,13 @@ if [[ $hardware == false ]]; then
   done
 fi
 
-loaded_awdl=false
-[[ -e $SYS/module/brcmfmac/parameters/awdl_create_flags ]] && loaded_awdl=true
+loaded_awdl=false switch=
+if [[ -e $SYS/module/brcmfmac/parameters/awdl_create_flags ]]; then
+  loaded_awdl=true
+elif [[ -r $SYS/module/brcmfmac/parameters/awdl ]]; then
+  loaded_awdl=true
+  switch=$(< "$SYS/module/brcmfmac/parameters/awdl") || switch=
+fi
 
 # The brcmfmac the running kernel would load: yes, no, or unknown when that
 # cannot be read. Asked only when it matters: a loaded driver with AWDL is
@@ -54,13 +61,15 @@ loaded_awdl=false
 installed=unknown
 if [[ $hardware == true && $loaded_awdl == false && -d ${OMDROP_RADIO_TEST_ROOT:-}/lib/modules/$(uname -r) ]] \
    && command -v modinfo >/dev/null 2>&1 && parm=$(modinfo -F parm brcmfmac 2>/dev/null); then
-  [[ $'\n'$parm == *$'\n'awdl_create_flags:* ]] && installed=yes || installed=no
+  [[ $'\n'$parm == *$'\n'awdl_create_flags:* || $'\n'$parm == *$'\n'awdl:* ]] && installed=yes || installed=no
 fi
 
 # Every say is a fixed string: nothing read from the system goes into the JSON.
 missing=
 if [[ $hardware == false ]]; then
   missing='{"id":"hardware","say":"This computer has no Apple Broadcom Wi-Fi, which this radio backend drives: it runs only on Apple Silicon Macs."}'
+elif [[ $loaded_awdl == true && $switch == 0 ]]; then
+  missing='{"id":"radio","say":"AirDrop is turned off in the Wi-Fi driver (the brcmfmac option awdl=0). Remove that option, usually set in /etc/modprobe.d, and restart."}'
 elif [[ $loaded_awdl == true ]]; then
   :
 elif [[ $installed == no ]]; then
