@@ -641,6 +641,82 @@ class ProcessGroupTests(HookHarness):
             os.kill(pid, signal.SIGKILL)
 
 
+# The stale-brcmutil case, not a model of kmod: `-r` removes only the module
+# it is named, and only when nothing holds it. Loading brcmfmac fails while the
+# stock brcmutil (marked `stock`) is resident, as the DKMS brcmfmac does on the
+# missing CONFIG_BRCMDBG exports (issue 51).
+MODPROBE = r'''#!/usr/bin/env bash
+echo "modprobe $*" >> "$STUB/modprobe.log"
+sys=$STUB/sys/module
+if [[ $1 == -r ]]; then
+  [[ -d $sys/$2 ]] || exit 0
+  [[ -z $(ls -A "$sys/$2/holders") ]] || exit 1
+  rm -rf "${sys:?}/$2"
+  rm -f "$sys"/*/holders/"$2"
+  exit 0
+fi
+[[ $1 == brcmfmac ]] || exit 1
+[[ -e $sys/brcmutil/stock ]] && { echo "Unknown symbol brcmu_dbg_hex_dump" >&2; exit 1; }
+mkdir -p "$sys/brcmutil/holders" "$sys/brcmfmac/holders"
+touch "$sys/brcmutil/holders/brcmfmac"
+'''
+
+
+class ReloadTests(unittest.TestCase):
+    """`awdl-up --reload` swaps in the patched driver without a reboot."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.stub = self.root / "stub"
+        self.sys = self.stub / "sys" / "module"
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        executable(self.bin / "modprobe", MODPROBE)
+        executable(self.bin / "sleep", "#!/usr/bin/env bash\nexit 0\n")
+        # No Wi-Fi interface ever appears, so a successful load ends at exit 4.
+        executable(self.bin / "ip", "#!/usr/bin/env bash\nexit 1\n")
+        awdl_up = (USERSPACE / "awdl-up").read_text()
+        for old, new in (("[[ $EUID -eq 0 ]]", "true"),
+                         ("NMCONF_VENDOR=/usr/lib/NetworkManager/conf.d/", f"NMCONF_VENDOR={self.stub}/vendor-"),
+                         ("NMCONF=/etc/NetworkManager/conf.d/", f"NMCONF={self.stub}/"),
+                         ("SYSMOD=/sys/module", f"SYSMOD={self.sys}")):
+            self.assertIn(old, awdl_up)
+            awdl_up = awdl_up.replace(old, new)
+        self.awdl_up = self.root / "awdl-up"
+        executable(self.awdl_up, awdl_up)
+        # The stock modules a boot loaded, before the DKMS ones were installed.
+        for mod, holders in (("brcmutil", ["brcmfmac"]), ("brcmfmac", ["brcmfmac_wcc"]),
+                             ("brcmfmac_wcc", [])):
+            (self.sys / mod / "holders").mkdir(parents=True)
+            for holder in holders:
+                (self.sys / mod / "holders" / holder).touch()
+        (self.sys / "brcmutil" / "stock").touch()
+
+    def reload(self):
+        env = dict(os.environ, STUB=str(self.stub), PATH=f"{self.bin}:{os.environ['PATH']}",
+                   OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub", AWDL_WAIT_STA="0")
+        return subprocess.run([str(self.awdl_up), "--reload"], capture_output=True, text=True,
+                              env=env, timeout=10, cwd="/")
+
+    def test_the_stock_brcmutil_is_replaced_with_the_driver(self):
+        result = self.reload()
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertIn("brcmfmac reloaded", result.stdout)
+        self.assertTrue((self.sys / "brcmfmac").is_dir())
+        self.assertFalse((self.sys / "brcmutil" / "stock").exists())
+
+    def test_a_second_brcmutil_user_stops_the_reload_before_the_unload(self):
+        (self.sys / "brcmutil" / "holders" / "brcmsmac").touch()
+        result = self.reload()
+        self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
+        self.assertIn("brcmutil is also used by brcmsmac", result.stdout)
+        self.assertFalse((self.stub / "modprobe.log").exists())
+        self.assertTrue((self.sys / "brcmfmac").is_dir())
+
+
+
 class ProbeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
