@@ -40,19 +40,22 @@ if [[ $hardware == false ]]; then
   done
 fi
 
-# The brcmfmac the running kernel would load: yes, no, or unknown when that
-# cannot be read. Only a modinfo that answered is evidence either way; one that
-# failed says nothing about the build. A running kernel whose module tree is
-# gone was upgraded without a restart, and the build for the new one is not
-# this kernel's to judge. No pipelines, as in dkms.conf.in: grep -q closing a
-# pipe early reads as absent under pipefail.
-installed=unknown
-if [[ -d ${OMDROP_RADIO_TEST_ROOT:-}/lib/modules/$(uname -r) ]] && command -v modinfo >/dev/null 2>&1 \
-   && parm=$(modinfo -F parm brcmfmac 2>/dev/null); then
-  [[ $'\n'$parm == *$'\n'awdl_create_flags:* ]] && installed=yes || installed=no
-fi
 loaded_awdl=false
 [[ -e $SYS/module/brcmfmac/parameters/awdl_create_flags ]] && loaded_awdl=true
+
+# The brcmfmac the running kernel would load: yes, no, or unknown when that
+# cannot be read. Asked only when it matters: a loaded driver with AWDL is
+# ready whatever is on disk, and no hardware needs no verdict. Only a modinfo
+# that answered is evidence either way; one that failed says nothing about the
+# build. A running kernel whose module tree is gone was upgraded without a
+# restart, and the build for the new one is not this kernel's to judge. No
+# pipelines, as in dkms.conf.in: grep -q closing a pipe early reads as absent
+# under pipefail.
+installed=unknown
+if [[ $hardware == true && $loaded_awdl == false && -d ${OMDROP_RADIO_TEST_ROOT:-}/lib/modules/$(uname -r) ]] \
+   && command -v modinfo >/dev/null 2>&1 && parm=$(modinfo -F parm brcmfmac 2>/dev/null); then
+  [[ $'\n'$parm == *$'\n'awdl_create_flags:* ]] && installed=yes || installed=no
+fi
 
 # Every say is a fixed string: nothing read from the system goes into the JSON.
 missing=

@@ -741,6 +741,15 @@ class ProbeTests(unittest.TestCase):
         self.installed(awdl=True)
         self.assertEqual(self.answer()["missing"], [])
 
+    def test_a_loaded_driver_with_awdl_never_asks_modinfo(self):
+        # The loaded driver settles it, so a slow module read cannot delay doctor.
+        self.loaded(awdl=True)
+        self.installed(awdl=False)
+        asked = self.root / "modinfo.asked"
+        executable(self.root / "bin" / "modinfo", f"#!/usr/bin/env bash\ntouch {asked}\n")
+        self.assertEqual(self.answer()["missing"], [])
+        self.assertFalse(asked.exists())
+
     def test_a_running_kernel_without_a_module_tree_is_told_to_restart(self):
         # Upgraded without a restart: the new kernel's build is not ours to judge.
         self.pci("0x14e4", "0x028000")
