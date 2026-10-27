@@ -42,10 +42,11 @@ sudo systemctl enable --now awdl0.service
 
 If a kernel update breaks the DKMS build, the stock `brcmfmac` loads instead: DKMS sets the kernel's own driver aside only when its build installs, and puts it back when the package is removed. You lose AWDL, not the network.
 
-On a kernel whose own `brcmfmac` already has this AWDL support, DKMS skips the build and that kernel's driver stays in use. The series is merged into `aurora-wip`, so a `linux-aurora` built from a revision that carries it will be such a kernel. The check looks only for the `awdl_create_flags` module parameter, which 0004 adds. A kernel built from `aurora-wip` as of #183 carries 0001–0008 with the same patch IDs and drives the interface the helpers use, so sending, receiving and naming peers don't need this package's module there. It lacks the patches that aren't upstream:
+On a kernel whose own `brcmfmac` already has this AWDL support, DKMS skips the build and that kernel's driver stays in use. The check looks for either of two module parameters: `awdl_create_flags`, which 0004 adds, or `awdl`, the on/off switch that replaced it upstream. With `awdl=0`, `omdrop doctor` says AirDrop is turned off in the driver.
 
-- **0009, the `awdl_trace` fix** ([#213](https://github.com/aurora-silicon/linux/pull/213)): windows open with transmit and receive unproven, so a radio that has stopped transmitting isn't caught before the window opens. Receive is still confirmed once data frames arrive.
-- **0010–0014, instrumentation:** the firmware RAM snapshot (`brcm_iovar.py awdl-if fwdump`), and the action-frame forwarding that `awdl-resolve` and `airdrop-send.py --af-log` read.
+- **`linux-aurora` 7.2.11** is such a kernel. Its `brcmfmac` has `awdl` and no `awdl_create_flags`. It also has `awdl_trace` (0009, [#213](https://github.com/aurora-silicon/linux/pull/213)), so windows prove transmit before they open, as with this package's module. Its AWDL create and destroy commands match the ones the helpers send. Sending and receiving on it haven't been tested on hardware yet (#56).
+- **A kernel built from `aurora-wip` as of #183** carries 0001–0008 with the same patch IDs and drives the interface the helpers use. It lacks 0009, so windows there open with transmit and receive unproven, and a radio that has stopped transmitting isn't caught before the window opens. Receive is still confirmed once data frames arrive.
+- **Neither has 0010–0014, which are instrumentation:** the firmware RAM snapshot (`brcm_iovar.py awdl-if fwdump`), and the action-frame forwarding that `awdl-resolve` and `airdrop-send.py --af-log` read. Sending, receiving and naming peers don't need them.
 
 ## What the package installs
 

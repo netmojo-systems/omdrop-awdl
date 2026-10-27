@@ -9,10 +9,12 @@
 #
 # A loaded brcmfmac is not necessarily one with AWDL. When the DKMS build
 # fails for a new kernel, nothing is installed for it and the kernel's own
-# brcmfmac loads instead (issue 51). The marker is the awdl_create_flags
-# parameter, which only an AWDL brcmfmac has, whether ours or a kernel's own
-# (dkms.conf.in stands aside for those): in sysfs for the loaded module, from
-# modinfo for the one the running kernel would load.
+# brcmfmac loads instead (issue 51). The marker is a parameter only an AWDL
+# brcmfmac has, whether ours or a kernel's own (dkms.conf.in stands aside for
+# those): awdl_create_flags, or awdl, the on/off switch that replaced it in
+# the series as linux-aurora 7.2 carries it. It is read in sysfs for the
+# loaded module, and from modinfo for the one the running kernel would load.
+# A loaded switch reading 0 is AWDL turned off, not missing.
 #
 # Exit 0: the JSON object on stdout.
 #      2: usage.
@@ -40,8 +42,20 @@ if [[ $hardware == false ]]; then
   done
 fi
 
-loaded_awdl=false
-[[ -e $SYS/module/brcmfmac/parameters/awdl_create_flags ]] && loaded_awdl=true
+# Capability and the switch are separate questions. A loaded driver that has
+# either marker can do AWDL; the switch, where it exists, then says whether it
+# is on (any nonzero integer: the driver reads it as a boolean), off (0), or
+# unknown when it cannot be read as an integer. The switch is read even when
+# awdl_create_flags is present too, so a known 0 always wins.
+loaded_awdl=false switch=none
+p=$SYS/module/brcmfmac/parameters
+[[ -e $p/awdl_create_flags || -e $p/awdl ]] && loaded_awdl=true
+if [[ -e $p/awdl ]]; then
+  switch=unknown
+  if v=$(cat -- "$p/awdl" 2>/dev/null) && [[ $v =~ ^-?[0-9]+$ ]]; then
+    [[ $v =~ ^-?0+$ ]] && switch=off || switch=on
+  fi
+fi
 
 # The brcmfmac the running kernel would load: yes, no, or unknown when that
 # cannot be read. Asked only when it matters: a loaded driver with AWDL is
@@ -54,13 +68,17 @@ loaded_awdl=false
 installed=unknown
 if [[ $hardware == true && $loaded_awdl == false && -d ${OMDROP_RADIO_TEST_ROOT:-}/lib/modules/$(uname -r) ]] \
    && command -v modinfo >/dev/null 2>&1 && parm=$(modinfo -F parm brcmfmac 2>/dev/null); then
-  [[ $'\n'$parm == *$'\n'awdl_create_flags:* ]] && installed=yes || installed=no
+  [[ $'\n'$parm == *$'\n'awdl_create_flags:* || $'\n'$parm == *$'\n'awdl:* ]] && installed=yes || installed=no
 fi
 
 # Every say is a fixed string: nothing read from the system goes into the JSON.
 missing=
 if [[ $hardware == false ]]; then
   missing='{"id":"hardware","say":"This computer has no Apple Broadcom Wi-Fi, which this radio backend drives: it runs only on Apple Silicon Macs."}'
+elif [[ $switch == off ]]; then
+  missing='{"id":"radio","say":"AirDrop is turned off in the Wi-Fi driver (brcmfmac awdl=0). Remove that setting, from /etc/modprobe.d or the kernel command line, and restart."}'
+elif [[ $switch == unknown ]]; then
+  missing='{"id":"radio","say":"The Wi-Fi driver supports AirDrop, but its awdl setting could not be read, so whether AirDrop is turned on is unknown. Restart, and if this message remains, check the brcmfmac awdl setting."}'
 elif [[ $loaded_awdl == true ]]; then
   :
 elif [[ $installed == no ]]; then

@@ -25,6 +25,11 @@ cat "$3.parm" 2>/dev/null || exit 1
 """
 
 NATIVE = "awdl_create_flags:interface_create flags for AWDL (uint)\ndebug:Level of debug output (int)\n"
+# linux-aurora 7.2.11's brcmfmac, as modinfo -F parm prints it: the series
+# after aurora-silicon/linux d4f767b and e75cc82, with no awdl_create_flags.
+NATIVE_SWITCH = ("awdl_bssid:interface_create BSSID for AWDL (default: the fixed AWDL BSSID) (charp)\n"
+                 "awdl:AWDL interface creation through the vendor command (default 1, 0 turns it off) (int)\n"
+                 "awdl_trace:Log AWDL tx completions (int)\ndebug:Level of debug output (int)\n")
 STOCK = "debug:Level of debug output (int)\np2pon:Enable legacy p2p management functionality (int)\n"
 
 
@@ -78,6 +83,17 @@ printf '%s' "$value"
         value = self.source(f"kver={KV}")
         self.assertEqual(value, "^$")
         self.assertFalse(self.builds(value))
+
+    def test_a_kernel_with_the_awdl_switch_is_skipped(self):
+        self.archive(NATIVE_SWITCH)
+        for assignment in (f"kernelver={KV}", f"kver={KV}"):
+            with self.subTest(assignment=assignment):
+                self.assertEqual(self.source(assignment), "^$")
+
+    def test_other_awdl_parameters_alone_are_not_native(self):
+        # Only the two markers count: a prefix match on "awdl" would not do.
+        self.archive(STOCK + "awdl_trace:Log AWDL tx completions (int)\n")
+        self.assertEqual(self.source(f"kernelver={KV}"), "UNSET")
 
     def test_a_stock_kernel_still_builds(self):
         self.archive(STOCK)

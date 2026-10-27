@@ -755,20 +755,74 @@ class ProbeTests(unittest.TestCase):
         return subprocess.run([str(probe or self.probe), *args], capture_output=True,
                               text=True, env=env, timeout=5, cwd="/")
 
-    def installed(self, awdl, release=None):
+    def installed(self, awdl, release=None, marker="awdl_create_flags"):
         # The brcmfmac the running kernel would load, as modinfo reports it.
         (self.root / "test-root" / "lib" / "modules" / (release or os.uname().release)).mkdir(parents=True)
-        parm = "awdl_create_flags:interface_create flags for AWDL (uint)\\n" if awdl else ""
+        parm = f"{marker}:AWDL (int)\\nawdl_trace:Log AWDL tx completions (int)\\n" if awdl else ""
         (self.root / "bin").mkdir(exist_ok=True)
         executable(self.root / "bin" / "modinfo",
                    f'#!/usr/bin/env bash\nprintf "roamoff:Do not use internal roaming engine (int)\\n{parm}"\n')
 
-    def loaded(self, awdl):
+    def loaded(self, awdl, switch=None):
+        # switch: the awdl on/off parameter's value, for the series as
+        # linux-aurora 7.2 carries it, which has no awdl_create_flags.
         params = self.sys / "module" / "brcmfmac" / "parameters"
         params.mkdir(parents=True)
         (params / "roamoff").touch()
-        if awdl:
+        (params / "awdl_trace").write_text("0\n")
+        if switch is not None:
+            (params / "awdl").write_text(f"{switch}\n")
+        elif awdl:
             (params / "awdl_create_flags").touch()
+
+    def test_a_native_driver_with_the_awdl_switch_on_is_ready(self):
+        self.loaded(awdl=True, switch=1)
+        self.installed(awdl=True, marker="awdl")
+        self.assertEqual(self.answer()["missing"], [])
+
+    def test_a_native_driver_with_awdl_off_says_so(self):
+        self.loaded(awdl=True, switch=0)
+        say = self.answer()["missing"][0]["say"]
+        self.assertIn("awdl=0", say)
+        self.assertNotIn("not built", say)
+
+    def test_awdl_off_wins_over_the_older_marker(self):
+        self.loaded(awdl=True, switch=0)
+        (self.sys / "module" / "brcmfmac" / "parameters" / "awdl_create_flags").touch()
+        self.assertIn("awdl=0", self.answer()["missing"][0]["say"])
+
+    def test_any_nonzero_switch_is_on(self):
+        self.loaded(awdl=True, switch=-2)
+        self.assertEqual(self.answer()["missing"], [])
+
+    def test_an_unreadable_switch_is_unknown_not_ready_or_stock(self):
+        # Fault boundaries: the published driver's switch is 0444 and an integer.
+        self.installed(awdl=True, marker="awdl")
+        params = self.sys / "module" / "brcmfmac" / "parameters"
+        for value in ("", "on", None):
+            with self.subTest(value=value):
+                shutil.rmtree(self.sys / "module" / "brcmfmac", ignore_errors=True)
+                self.loaded(awdl=True, switch=0)
+                if value is None:
+                    (params / "awdl").chmod(0)
+                    if os.access(params / "awdl", os.R_OK):
+                        continue  # root reads a mode-000 file
+                else:
+                    (params / "awdl").write_text(value)
+                say = self.answer()["missing"][0]["say"]
+                self.assertIn("could not be read", say)
+                self.assertNotIn("kernel's own", say)
+
+    def test_an_installed_switch_driver_counts_as_built(self):
+        # The kernel's next boot loads a driver with the switch: not a missing build.
+        self.loaded(awdl=False)
+        self.installed(awdl=True, marker="awdl")
+        self.assertIn("Restart to load AirDrop's driver", self.answer()["missing"][0]["say"])
+
+    def test_awdl_trace_alone_is_not_awdl(self):
+        self.loaded(awdl=False)
+        self.installed(awdl=False)
+        self.assertIn("not built", self.answer()["missing"][0]["say"])
 
     def answer(self):
         result = self.run_probe("--json")

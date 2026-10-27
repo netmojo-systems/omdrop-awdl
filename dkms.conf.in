@@ -17,12 +17,15 @@
 
 # Stand aside on a kernel whose own brcmfmac already has AWDL.
 #
-# The series in 0001-0008 is merged into aurora-silicon/linux aurora-wip, so a
-# linux-aurora release will carry it. Installing ours on that kernel would swap
-# its driver, and every Wi-Fi fix it has that the Asahi tree vendored here
-# lacks, for an older one. The marker is the awdl_create_flags parameter the
-# series adds, which no stock brcmfmac has: in the kernel's module, in the copy
-# DKMS archived from it, or in modules.builtin.modinfo when it is built in.
+# The series in 0001-0008 is merged into aurora-silicon/linux, and linux-aurora
+# 7.2 carries it. Installing ours on that kernel would swap its driver, and
+# every Wi-Fi fix it has that the Asahi tree vendored here lacks, for an older
+# one. The marker is a parameter the series adds, which no stock brcmfmac has:
+# awdl_create_flags as the series was first merged, or awdl, the on/off switch
+# that replaced it (aurora-silicon/linux e75cc82 and d4f767b; linux-aurora
+# 7.2.11 has awdl and no awdl_create_flags). It is looked for in the kernel's
+# module, in the copy DKMS archived from it, or in modules.builtin.modinfo
+# when it is built in.
 #
 # Two readers source this file: dkms itself, with $kernelver set, and the
 # pacman hook's BUILD_EXCLUSIVE_KERNEL check, which sets only $kver. A regex no
@@ -36,12 +39,12 @@ _awdl_native() {
            "${dkms_tree:-/var/lib/dkms}/brcmfmac-awdl/original_module/$kv/"*/brcmfmac.ko*; do
     [[ -f $f && $f != *.origin ]] || continue
     p=$(modinfo -F parm "$f" 2>/dev/null) || continue
-    [[ $'\n'$p == *$'\n'awdl_create_flags:* ]] && return 0
+    [[ $'\n'$p == *$'\n'awdl_create_flags:* || $'\n'$p == *$'\n'awdl:* ]] && return 0
   done
   f=/lib/modules/$kv/modules.builtin.modinfo
   [[ -r $f ]] || return 1
   p=$(tr '\0' '\n' < "$f" 2>/dev/null) || return 1
-  [[ $'\n'$p == *$'\n'brcmfmac.parm=awdl_create_flags:* ]]
+  [[ $'\n'$p == *$'\n'brcmfmac.parm=awdl_create_flags:* || $'\n'$p == *$'\n'brcmfmac.parm=awdl:* ]]
 }
 _awdl_kv=${kernelver:-${kver:-}}
 if [[ -n $_awdl_kv ]] && _awdl_native "$_awdl_kv"; then
