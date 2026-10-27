@@ -786,6 +786,33 @@ class ProbeTests(unittest.TestCase):
         self.assertIn("awdl=0", say)
         self.assertNotIn("not built", say)
 
+    def test_awdl_off_wins_over_the_older_marker(self):
+        self.loaded(awdl=True, switch=0)
+        (self.sys / "module" / "brcmfmac" / "parameters" / "awdl_create_flags").touch()
+        self.assertIn("awdl=0", self.answer()["missing"][0]["say"])
+
+    def test_any_nonzero_switch_is_on(self):
+        self.loaded(awdl=True, switch=-2)
+        self.assertEqual(self.answer()["missing"], [])
+
+    def test_an_unreadable_switch_is_unknown_not_ready_or_stock(self):
+        # Fault boundaries: the published driver's switch is 0444 and an integer.
+        self.installed(awdl=True, marker="awdl")
+        params = self.sys / "module" / "brcmfmac" / "parameters"
+        for value in ("", "on", None):
+            with self.subTest(value=value):
+                shutil.rmtree(self.sys / "module" / "brcmfmac", ignore_errors=True)
+                self.loaded(awdl=True, switch=0)
+                if value is None:
+                    (params / "awdl").chmod(0)
+                    if os.access(params / "awdl", os.R_OK):
+                        continue  # root reads a mode-000 file
+                else:
+                    (params / "awdl").write_text(value)
+                say = self.answer()["missing"][0]["say"]
+                self.assertIn("could not be read", say)
+                self.assertNotIn("kernel's own", say)
+
     def test_an_installed_switch_driver_counts_as_built(self):
         # The kernel's next boot loads a driver with the switch: not a missing build.
         self.loaded(awdl=False)
