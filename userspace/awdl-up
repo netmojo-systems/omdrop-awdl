@@ -36,6 +36,7 @@ NMCONF_VENDOR=/usr/lib/NetworkManager/conf.d/99-awdl-unmanaged.conf
 NMCONF=/etc/NetworkManager/conf.d/99-awdl-unmanaged.conf
 WAIT_STA=${AWDL_WAIT_STA:-60}          # seconds to wait for the infra interface
 WAIT_MAC=${AWDL_WAIT_MAC:-90}          # seconds to wait for it to stop randomising
+SYSMOD=/sys/module
 
 # The Wi-Fi interface is found, not assumed. It is wlan0 on a stock Arch
 # install and wld0 on a machine carrying a naming rule, and hardcoding either
@@ -162,12 +163,32 @@ regdom_report(){
 #
 # This exists so a channel-sequence change can be applied without a reboot:
 # awdl-up is reachable through polkit, `modprobe` is not.
+#
+# brcmutil goes too (issue 51). The first reload after a DKMS install, whether
+# the package was just installed or rebuilt for a new kernel, finds the stock
+# brcmutil still in memory. The patched brcmfmac is built with CONFIG_BRCMDBG
+# and needs symbols only the patched brcmutil exports, so it fails to load
+# against the stock one and Wi-Fi stays down until a reboot. `modprobe -r` is
+# documented to drop dependencies left unused, but it did not: f0010 (kmod
+# 34.2) reloaded brcmfmac and still had its boot-time brcmutil and cfg80211.
+# It has to be named.
 reload_driver(){
-  local mod
+  local mod h held=()
+  # brcmfmac is meant to be brcmutil's only user. Anything else holding it keeps
+  # the old copy resident, so stop here while the Wi-Fi link still works.
+  for h in "$SYSMOD"/brcmutil/holders/*; do
+    [[ -e $h ]] || continue
+    [[ ${h##*/} == brcmfmac ]] || held+=("${h##*/}")
+  done
+  if (( ${#held[@]} )); then
+    log "brcmutil is also used by ${held[*]}, so it cannot be unloaded and the new brcmfmac may not load against it. Not reloading; restart to load the new driver."
+    return 5
+  fi
   log "unloading brcmfmac (awdl0 and the Wi-Fi link go with it)"
-  for mod in brcmfmac_wcc brcmfmac; do
+  for mod in brcmfmac_wcc brcmfmac brcmutil; do
     modprobe -r "$mod" 2>/dev/null || log "modprobe -r $mod failed (in use?)"
   done
+  [[ -d $SYSMOD/brcmutil ]] && log "brcmutil is still loaded; if it is not the copy on disk, brcmfmac will fail with unknown symbols"
   sleep 2
   modprobe brcmfmac || { log "modprobe brcmfmac FAILED -- no Wi-Fi. Reboot to recover."; return 1; }
   log "brcmfmac reloaded; waiting for the Wi-Fi interface"
