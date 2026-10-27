@@ -272,6 +272,18 @@ class UpTests(HookHarness):
         self.assertIn("could not be started", result.stderr.splitlines()[-1])
         self.assertEqual(self.log("awdl-up.log").count("\n"), 1)
 
+    def test_a_driver_without_awdl_is_named_and_not_rebuilt(self):
+        # Issue 51: the kernel's own brcmfmac is loaded, so no create can work.
+        (self.stub / "driver").touch()
+        say = "AirDrop's Wi-Fi driver is not built for the running kernel; rebuild it."
+        executable(self.lib / "radio" / "probe", "#!/usr/bin/env bash\nprintf '%s\\n' "
+                   + shlex.quote(json.dumps({"backend": "awdl", "hooks": 1, "hardware": True,
+                                             "missing": [{"id": "radio", "say": say}]})))
+        result = self.hook("up")
+        self.assertEqual(result.returncode, 4, result.stderr)
+        self.assertTrue(result.stderr.splitlines()[-1].endswith(say), result.stderr)
+        self.assertEqual(self.log("awdl-up.log"), "")
+
     def test_a_transmitting_radio_with_a_link_local_exits_0(self):
         self.interface()
         (self.stub / "dmesg").write_text(TRANSMITTING)

@@ -151,6 +151,21 @@ awdl0_ready(){
 # two used to be conflated into one wrong message.
 driver_loaded(){ [[ -d /sys/module/brcmfmac ]]; }
 
+# The probe hook's sentence for a missing radio, or nothing when it reports
+# none or cannot be run. It tells a driver that is not loaded from one that is
+# not built for this kernel, or is the kernel's own and has no AWDL (issue 51);
+# asking it keeps doctor and start giving the same answer.
+driver_verdict(){
+  local out
+  out=$(timeout --foreground 10 "$LIB/radio/probe" --json 2>/dev/null) || return 0
+  python3 -c 'import json, sys
+for m in json.loads(sys.argv[1]).get("missing", []):
+    if m.get("id") == "radio":
+        print(m["say"])
+        break' "$out" 2>/dev/null
+  return 0
+}
+
 # NetworkManager's view of awdl0, e.g. "10 (unmanaged)"; empty when there is
 # no NetworkManager or it does not know the device.
 nm_state(){
@@ -561,6 +576,17 @@ radio_up(){
   # to the Wi-Fi link. Telling the user their driver is missing, and refusing,
   # was wrong on the diagnosis and wrong on the remedy. Rebuild the interface
   # and carry on.
+  #
+  # A rebuild needs a driver with AWDL loaded, though. When the probe names
+  # what is missing instead -- no driver, or one without AWDL -- retrying the
+  # create cannot help, so say that.
+  if ! awdl0_ready; then
+    local verdict; verdict=$(driver_verdict)
+    if [[ -n $verdict ]]; then
+      set_reason no_awdl0
+      die 4 "$verdict"
+    fi
+  fi
   if ! awdl0_ready && driver_loaded; then
     log "$IF is missing but the driver is loaded (a Wi-Fi off/on removes it); rebuilding it"
     timeout --foreground 60 "$LIB/awdl-up" >/dev/null 2>&1 || true
