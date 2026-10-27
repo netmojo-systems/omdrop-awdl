@@ -1,6 +1,6 @@
 # omdrop-awdl
 
-AWDL protocol activation for Apple Silicon Macs on Linux: fourteen patches to `brcmfmac`, a DKMS package that builds them, and helpers.
+AWDL protocol activation for Apple Silicon Macs on Linux: sixteen patches to `brcmfmac`, a DKMS package that builds them, and helpers.
 
 AWDL (Apple Wireless Direct Link) is the link layer AirDrop and AirPlay run over. These patches expose the Wi-Fi firmware's own AWDL implementation as an `awdl0` interface, instead of reimplementing the protocol in userspace.
 
@@ -200,8 +200,10 @@ An open window costs 71 mW (95% CI 59.8–82.5), measured on an M1 Pro over 5.6 
 | 0010 | Firmware RAM snapshot vendor op |
 | 0011–0013 | Log, dump and forward AWDL action frames |
 | 0014 | Gate the action-frame log behind `awdl_trace` too |
+| 0015 | Build against 7.1 headers as well as 7.2 (`remain_on_channel`'s `rx_addr`) |
+| 0016 | Report port authorization only after the connect result (an ordering error in `asahi-7.2.12-2`) |
 
-0001–0008 are the `brcm80211` commits [aurora-silicon/linux](https://github.com/aurora-silicon/linux) `aurora-wip` carries, with the same patch IDs: our series from [#24](https://github.com/aurora-silicon/linux/pull/24), then the maintainers' follow-up from [#183](https://github.com/aurora-silicon/linux/pull/183). They apply here to Asahi's `asahi-7.1.13-3`, which also carries a port-authorization fix in `cfg80211.c` that `aurora-wip` lacks. So after applying only 0001–0008, the tree differs from `aurora-wip` at `bc1823a` by that fix alone. 0009 restores the tx-completion log that #183 compiled out of release builds, which `omdrop-discoverable` counts to tell a transmitting radio from a parked one; it is proposed upstream in [#213](https://github.com/aurora-silicon/linux/pull/213). 0010–0014 are instrumentation that stays out of the kernel tree. The action-frame patches show the PSF and MIF frames discovery runs on. Little about this protocol is documented, so start there if you're extending this work.
+0001–0008 are the `brcm80211` commits [aurora-silicon/linux](https://github.com/aurora-silicon/linux) `aurora-wip` carries, with the same patch IDs: our series from [#24](https://github.com/aurora-silicon/linux/pull/24), then the maintainers' follow-up from [#183](https://github.com/aurora-silicon/linux/pull/183). On Asahi's `asahi-7.1.13-3`, applying only 0001–0008 gave a tree that differed from `aurora-wip` at `bc1823a` by one port-authorization fix in `cfg80211.c`. The tree vendored now is `asahi-7.2.12-2`. 0008 is rebased onto its reworked `brcmf_detach()`, so its patch ID no longer matches `aurora-wip`'s, though its effect is unchanged. 0015 lets that tree build against 7.1 headers as well as 7.2. 0009 restores the tx-completion log that #183 compiled out of release builds, which `omdrop-discoverable` counts to tell a transmitting radio from a parked one; it is proposed upstream in [#213](https://github.com/aurora-silicon/linux/pull/213). 0010–0014 are instrumentation that stays out of the kernel tree. The action-frame patches show the PSF and MIF frames discovery runs on. Little about this protocol is documented, so start there if you're extending this work.
 
 ## Hardware compatibility
 
@@ -248,7 +250,7 @@ Tried it on another Mac? [Send a hardware report](https://github.com/netmojo-sys
 
 ## Maintenance
 
-The patches apply to `asahi-7.1.13-3` (commit `94fb2334`), the tree vendored in `kernel/`, and touch fourteen files, all in `drivers/net/wireless/broadcom/brcm80211/brcmfmac/`. The pin is deliberate, so a rebase conflict shows up at build time rather than at runtime. [kernel/PROVENANCE.md](kernel/PROVENANCE.md) has the re-vendoring steps, and `tests/check-patch-drift` checks whether the patches apply to a newer tag.
+The patches apply to `asahi-7.2.12-2` (commit `2bb9d16f`), the tree vendored in `kernel/`, and every file they touch is in `drivers/net/wireless/broadcom/brcm80211/brcmfmac/`. The result builds against both 7.1 and 7.2 kernel headers. The pin is deliberate, so a rebase conflict shows up at build time rather than at runtime. [kernel/PROVENANCE.md](kernel/PROVENANCE.md) has the re-vendoring steps, and `tests/check-patch-drift` checks whether the patches apply to a newer tag.
 
 The data-path check counts per-frame `awdl txstatus` lines. The module logs them only while its `awdl_trace` parameter is set, and `omdrop-discoverable` sets it for the few seconds the check runs. The module is still built with `DEBUG`, which the firmware RAM snapshot (0010) and the debugfs files need.
 

@@ -6462,6 +6462,12 @@ brcmf_bss_connect_done(struct brcmf_cfg80211_info *cfg,
 		if (completed) {
 			brcmf_get_assoc_ies(cfg, ifp);
 			brcmf_update_bss_info(cfg, ifp);
+			if ((profile->use_fwsup == BRCMF_PROFILE_FWSUP_SAE) ||
+			    (profile->use_fwsup == BRCMF_PROFILE_FWSUP_PSK)) {
+				cfg80211_port_authorized(ndev, profile->bssid,
+							 NULL, 0, GFP_KERNEL);
+				brcmf_dbg(CONN, "Report port authorized\n");
+			}
 			set_bit(BRCMF_VIF_STATUS_CONNECTED,
 				&ifp->vif->sme_state);
 			conn_params.status = WLAN_STATUS_SUCCESS;
@@ -6906,6 +6912,8 @@ static s32 brcmf_dongle_roam(struct brcmf_if *ifp)
 	if (err)
 		bphy_err(drvr, "WLC_SET_ROAM_TRIGGER error (%d)\n", err);
 
+	roam_delta[0] = cpu_to_le32(WL_ROAM_DELTA);
+	roam_delta[1] = cpu_to_le32(BRCM_BAND_ALL);
 	err = brcmf_fil_cmd_data_set(ifp, BRCMF_C_SET_ROAM_DELTA,
 				     (void *)roam_delta, sizeof(roam_delta));
 	if (err)
