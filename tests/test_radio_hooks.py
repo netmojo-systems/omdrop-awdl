@@ -641,8 +641,8 @@ class ProcessGroupTests(HookHarness):
             os.kill(pid, signal.SIGKILL)
 
 
-# modprobe as kmod 34.2 behaved on f0010: `-r` removes only the module it is
-# named, and only when nothing holds it. Loading brcmfmac fails while the
+# The stale-brcmutil case, not a model of kmod: `-r` removes only the module
+# it is named, and only when nothing holds it. Loading brcmfmac fails while the
 # stock brcmutil (marked `stock`) is resident, as the DKMS brcmfmac does on the
 # missing CONFIG_BRCMDBG exports (issue 51).
 MODPROBE = r'''#!/usr/bin/env bash

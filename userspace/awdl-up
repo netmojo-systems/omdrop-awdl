@@ -169,9 +169,9 @@ regdom_report(){
 # brcmutil still in memory. The patched brcmfmac is built with CONFIG_BRCMDBG
 # and needs symbols only the patched brcmutil exports, so it fails to load
 # against the stock one and Wi-Fi stays down until a reboot. `modprobe -r` is
-# documented to drop dependencies left unused, but it did not: f0010 (kmod
-# 34.2) reloaded brcmfmac and still had its boot-time brcmutil and cfg80211.
-# It has to be named.
+# documented to drop dependencies left unused, but on a kmod 34.2 machine a
+# reload of brcmfmac left the boot-time brcmutil and cfg80211 resident, for
+# reasons not yet understood. It has to be named.
 reload_driver(){
   local mod h held=()
   # brcmfmac is meant to be brcmutil's only user. Anything else holding it keeps
