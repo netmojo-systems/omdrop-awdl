@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Netmojo Systems <56850867+netmojo@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 09:00:00 -0600
-Subject: [PATCH 15/15] wifi: brcmfmac: build against 7.1 and 7.2 headers
+Subject: [PATCH 15/16] wifi: brcmfmac: build against 7.1 and 7.2 headers
 
 Linux 7.2 adds rx_addr to cfg80211's remain_on_channel op. The vendored
 tree follows 7.2, so without this it builds only against 7.2 headers, and
