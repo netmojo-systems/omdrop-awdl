@@ -7,6 +7,13 @@
 #   (0x14e4) network controller (class 0x0280) on PCI without the driver.
 # missing: why discovery cannot work now, the most fundamental first.
 #
+# A loaded brcmfmac is not necessarily one with AWDL. When the DKMS build
+# fails for a new kernel, nothing is installed for it and the kernel's own
+# brcmfmac loads instead (issue 51). The marker is the awdl_create_flags
+# parameter, which only an AWDL brcmfmac has, whether ours or a kernel's own
+# (dkms.conf.in stands aside for those): in sysfs for the loaded module, from
+# modinfo for the one the running kernel would load.
+#
 # Exit 0: the JSON object on stdout.
 #      2: usage.
 set -uo pipefail
@@ -33,11 +40,37 @@ if [[ $hardware == false ]]; then
   done
 fi
 
+loaded_awdl=false
+[[ -e $SYS/module/brcmfmac/parameters/awdl_create_flags ]] && loaded_awdl=true
+
+# The brcmfmac the running kernel would load: yes, no, or unknown when that
+# cannot be read. Asked only when it matters: a loaded driver with AWDL is
+# ready whatever is on disk, and no hardware needs no verdict. Only a modinfo
+# that answered is evidence either way; one that failed says nothing about the
+# build. A running kernel whose module tree is gone was upgraded without a
+# restart, and the build for the new one is not this kernel's to judge. No
+# pipelines, as in dkms.conf.in: grep -q closing a pipe early reads as absent
+# under pipefail.
+installed=unknown
+if [[ $hardware == true && $loaded_awdl == false && -d ${OMDROP_RADIO_TEST_ROOT:-}/lib/modules/$(uname -r) ]] \
+   && command -v modinfo >/dev/null 2>&1 && parm=$(modinfo -F parm brcmfmac 2>/dev/null); then
+  [[ $'\n'$parm == *$'\n'awdl_create_flags:* ]] && installed=yes || installed=no
+fi
+
+# Every say is a fixed string: nothing read from the system goes into the JSON.
 missing=
 if [[ $hardware == false ]]; then
   missing='{"id":"hardware","say":"This computer has no Apple Broadcom Wi-Fi, which this radio backend drives: it runs only on Apple Silicon Macs."}'
+elif [[ $loaded_awdl == true ]]; then
+  :
+elif [[ $installed == no ]]; then
+  missing='{"id":"radio","say":"AirDrop'"'"'s Wi-Fi driver is not built for the running kernel; rebuild it with sudo dkms autoinstall, which also shows why the last build failed."}'
 elif [[ $driver == false ]]; then
   missing='{"id":"radio","say":"AirDrop'"'"'s Wi-Fi driver is not loaded. Restart to load it."}'
+elif [[ $installed == yes ]]; then
+  missing='{"id":"radio","say":"The Wi-Fi driver running now is the kernel'"'"'s own, which cannot do AirDrop. Restart to load AirDrop'"'"'s driver."}'
+else
+  missing='{"id":"radio","say":"The Wi-Fi driver running now is the kernel'"'"'s own, which cannot do AirDrop; restart, and if this message remains, rebuild AirDrop'"'"'s driver with sudo dkms autoinstall."}'
 fi
 printf '{"backend":"awdl","version":"%s","contract":"%s","hooks":1,"hardware":%s,"missing":[%s]}\n' \
   "$VERSION" "$VERSION" "$hardware" "$missing"

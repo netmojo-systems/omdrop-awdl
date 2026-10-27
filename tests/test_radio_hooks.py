@@ -16,6 +16,7 @@ first on PATH.
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -270,6 +271,18 @@ class UpTests(HookHarness):
         self.assertEqual(result.returncode, 4, result.stderr)
         self.assertIn("could not be started", result.stderr.splitlines()[-1])
         self.assertEqual(self.log("awdl-up.log").count("\n"), 1)
+
+    def test_a_driver_without_awdl_is_named_and_not_rebuilt(self):
+        # Issue 51: the kernel's own brcmfmac is loaded, so no create can work.
+        (self.stub / "driver").touch()
+        say = "AirDrop's Wi-Fi driver is not built for the running kernel; rebuild it."
+        executable(self.lib / "radio" / "probe", "#!/usr/bin/env bash\nprintf '%s\\n' "
+                   + shlex.quote(json.dumps({"backend": "awdl", "hooks": 1, "hardware": True,
+                                             "missing": [{"id": "radio", "say": say}]})))
+        result = self.hook("up")
+        self.assertEqual(result.returncode, 4, result.stderr)
+        self.assertTrue(result.stderr.splitlines()[-1].endswith(say), result.stderr)
+        self.assertEqual(self.log("awdl-up.log"), "")
 
     def test_a_transmitting_radio_with_a_link_local_exits_0(self):
         self.interface()
@@ -737,9 +750,25 @@ class ProbeTests(unittest.TestCase):
         (dev / "class").write_text(cls + "\n")
 
     def run_probe(self, *args, probe=None):
-        env = dict(os.environ, OMDROP_RADIO_TEST_ROOT=str(self.root / "test-root"))
+        env = dict(os.environ, OMDROP_RADIO_TEST_ROOT=str(self.root / "test-root"),
+                   PATH=f"{self.root / 'bin'}:{os.environ['PATH']}")
         return subprocess.run([str(probe or self.probe), *args], capture_output=True,
                               text=True, env=env, timeout=5, cwd="/")
+
+    def installed(self, awdl, release=None):
+        # The brcmfmac the running kernel would load, as modinfo reports it.
+        (self.root / "test-root" / "lib" / "modules" / (release or os.uname().release)).mkdir(parents=True)
+        parm = "awdl_create_flags:interface_create flags for AWDL (uint)\\n" if awdl else ""
+        (self.root / "bin").mkdir(exist_ok=True)
+        executable(self.root / "bin" / "modinfo",
+                   f'#!/usr/bin/env bash\nprintf "roamoff:Do not use internal roaming engine (int)\\n{parm}"\n')
+
+    def loaded(self, awdl):
+        params = self.sys / "module" / "brcmfmac" / "parameters"
+        params.mkdir(parents=True)
+        (params / "roamoff").touch()
+        if awdl:
+            (params / "awdl_create_flags").touch()
 
     def answer(self):
         result = self.run_probe("--json")
@@ -747,10 +776,62 @@ class ProbeTests(unittest.TestCase):
         return json.loads(result.stdout)
 
     def test_a_loaded_driver_is_hardware_with_nothing_missing(self):
-        (self.sys / "module" / "brcmfmac").mkdir()
+        self.loaded(awdl=True)
         self.assertEqual(self.answer(), {"backend": "awdl", "version": "0.9.1",
                                          "contract": "0.9.1", "hooks": 1,
                                          "hardware": True, "missing": []})
+
+    def test_the_kernels_own_driver_loaded_in_place_of_ours_is_missing_the_radio(self):
+        self.loaded(awdl=False)
+        self.installed(awdl=True)
+        answer = self.answer()
+        self.assertEqual([m["id"] for m in answer["missing"]], ["radio"])
+        self.assertIn("kernel's own", answer["missing"][0]["say"])
+
+    def test_a_kernel_without_our_build_says_so_not_restart(self):
+        # Issue 51: the DKMS build failed, so the stock brcmfmac is what loads.
+        self.loaded(awdl=False)
+        self.installed(awdl=False)
+        say = self.answer()["missing"][0]["say"]
+        self.assertIn("not built for the running kernel", say)
+        self.assertIn("dkms autoinstall", say)
+        self.assertNotIn("estart", say)
+
+    def test_any_kernel_release_leaves_the_answer_valid_json(self):
+        release = '7.1-custom"quote\\branch\t'
+        self.installed(awdl=False, release=release)
+        executable(self.root / "bin" / "uname", f"#!/usr/bin/env bash\nprintf '%s' {shlex.quote(release)}\n")
+        self.loaded(awdl=False)
+        self.assertIn("not built for the running kernel", self.answer()["missing"][0]["say"])
+
+    def test_a_failed_modinfo_is_not_a_missing_build(self):
+        self.loaded(awdl=False)
+        self.installed(awdl=True)
+        executable(self.root / "bin" / "modinfo", "#!/usr/bin/env bash\nexit 1\n")
+        say = self.answer()["missing"][0]["say"]
+        self.assertNotIn("not built", say)
+        self.assertIn("if this message remains", say)
+
+    def test_a_driver_with_awdl_has_nothing_missing(self):
+        self.loaded(awdl=True)
+        self.installed(awdl=True)
+        self.assertEqual(self.answer()["missing"], [])
+
+    def test_a_loaded_driver_with_awdl_never_asks_modinfo(self):
+        # The loaded driver settles it, so a slow module read cannot delay doctor.
+        self.loaded(awdl=True)
+        self.installed(awdl=False)
+        asked = self.root / "modinfo.asked"
+        executable(self.root / "bin" / "modinfo", f"#!/usr/bin/env bash\ntouch {asked}\n")
+        self.assertEqual(self.answer()["missing"], [])
+        self.assertFalse(asked.exists())
+
+    def test_a_running_kernel_without_a_module_tree_is_told_to_restart(self):
+        # Upgraded without a restart: the new kernel's build is not ours to judge.
+        self.pci("0x14e4", "0x028000")
+        (self.root / "bin").mkdir()
+        executable(self.root / "bin" / "modinfo", "#!/usr/bin/env bash\nexit 1\n")
+        self.assertIn("Restart to load it", self.answer()["missing"][0]["say"])
 
     def test_a_broadcom_wifi_chip_without_the_driver_is_missing_the_radio(self):
         self.pci("0x106b", "0x060400")
