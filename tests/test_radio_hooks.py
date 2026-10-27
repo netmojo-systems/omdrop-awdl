@@ -16,6 +16,7 @@ first on PATH.
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -666,9 +667,9 @@ class ProbeTests(unittest.TestCase):
         return subprocess.run([str(probe or self.probe), *args], capture_output=True,
                               text=True, env=env, timeout=5, cwd="/")
 
-    def installed(self, awdl):
+    def installed(self, awdl, release=None):
         # The brcmfmac the running kernel would load, as modinfo reports it.
-        (self.root / "test-root" / "lib" / "modules" / os.uname().release).mkdir(parents=True)
+        (self.root / "test-root" / "lib" / "modules" / (release or os.uname().release)).mkdir(parents=True)
         parm = "awdl_create_flags:interface_create flags for AWDL (uint)\\n" if awdl else ""
         (self.root / "bin").mkdir(exist_ok=True)
         executable(self.root / "bin" / "modinfo",
@@ -704,8 +705,24 @@ class ProbeTests(unittest.TestCase):
         self.loaded(awdl=False)
         self.installed(awdl=False)
         say = self.answer()["missing"][0]["say"]
-        self.assertIn(f"not built for the running kernel ({os.uname().release})", say)
-        self.assertNotIn("Restart", say)
+        self.assertIn("not built for the running kernel", say)
+        self.assertIn("dkms autoinstall", say)
+        self.assertNotIn("estart", say)
+
+    def test_any_kernel_release_leaves_the_answer_valid_json(self):
+        release = '7.1-custom"quote\\branch\t'
+        self.installed(awdl=False, release=release)
+        executable(self.root / "bin" / "uname", f"#!/usr/bin/env bash\nprintf '%s' {shlex.quote(release)}\n")
+        self.loaded(awdl=False)
+        self.assertIn("not built for the running kernel", self.answer()["missing"][0]["say"])
+
+    def test_a_failed_modinfo_is_not_a_missing_build(self):
+        self.loaded(awdl=False)
+        self.installed(awdl=True)
+        executable(self.root / "bin" / "modinfo", "#!/usr/bin/env bash\nexit 1\n")
+        say = self.answer()["missing"][0]["say"]
+        self.assertNotIn("not built", say)
+        self.assertIn("if this message remains", say)
 
     def test_a_driver_with_awdl_has_nothing_missing(self):
         self.loaded(awdl=True)
