@@ -1,0 +1,30 @@
+name: Kernel build
+
+# Compiles the patched driver, as DKMS would, against Asahi kernel trees the
+# package supports: the 7.1 baseline and the 7.2 tag linux-asahi ships.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  kbuild:
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [asahi-7.1.13-3, asahi-7.2.12-3]
+    name: kbuild (${{ matrix.tag }})
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install kernel build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bc bison flex libelf-dev libssl-dev
+      - name: Prepare ${{ matrix.tag }}
+        run: tests/kbuild-tree.sh "${{ matrix.tag }}" "$RUNNER_TEMP/linux"
+      - name: Build the driver
+        run: tests/kbuild.sh "$RUNNER_TEMP/linux"

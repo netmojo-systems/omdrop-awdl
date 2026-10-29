@@ -151,6 +151,13 @@ Shell is bash with `set -euo pipefail`, Python is the standard library only — 
 ```sh
 tests/check-patch-drift          # do the patches still apply to a newer Asahi tag?
 python3 -m unittest discover -s tests -q
+tests/kbuild.sh /usr/lib/modules/$(uname -r)/build   # does the driver build, as DKMS would?
+```
+
+CI also builds the driver against the Asahi 7.1 and 7.2 tags in `.github/workflows/kbuild.yml`. To reproduce one of those builds locally:
+
+```sh
+tests/kbuild-tree.sh asahi-7.2.12-3 /tmp/linux && tests/kbuild.sh /tmp/linux
 ```
 
 A hardware change also needs the setup output and evidence described in [What a pull request needs](#what-a-pull-request-needs). "Works" is not reproducible.
