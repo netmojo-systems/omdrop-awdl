@@ -11,7 +11,7 @@
 # skips the build entirely (see dkms.conf.in).
 
 pkgname=brcmfmac-awdl-dkms
-pkgver=0.10.3
+pkgver=0.10.4
 pkgrel=1
 _asahitag=asahi-7.2.12-2
 pkgdesc="AWDL (AirDrop link layer) support for Apple Broadcom Wi-Fi (BCM4378, BCM4387, BCM4388): DKMS module and root helpers"
