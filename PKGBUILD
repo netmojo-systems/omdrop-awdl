@@ -113,6 +113,7 @@ package() {
   sed "s/@VERSION@/${pkgver}/" "${startdir}/userspace/radio/probe" > "${lib}/radio/probe"
   chmod 755 "${lib}/radio/probe"
   install -Dm755 "${startdir}/userspace/awdl-up" "${lib}/awdl-up"
+  install -Dm755 "${startdir}/userspace/awdl-warmup" "${lib}/awdl-warmup"
   local helper
   for helper in awdl-airdrop-adv awdl-election awdl-mdns-respond awdl-peer-watch \
                 awdl-peers awdl-stats ble-airdrop-adv brcm_iovar mkpsf \
@@ -135,6 +136,8 @@ package() {
     "${pkgdir}/usr/share/polkit-1/actions/org.omarchy.omdrop.policy"
   install -Dm644 "${startdir}/packaging/awdl0.service" \
     "${pkgdir}/usr/lib/systemd/system/awdl0.service"
+  install -Dm644 "${startdir}/packaging/awdl-warmup.service" \
+    "${pkgdir}/usr/lib/systemd/system/awdl-warmup.service"
   # Vendor directories, not /etc: both are read after the package's own copy is
   # in place, and both leave an /etc override to the person running the machine.
   install -Dm644 "${startdir}/packaging/brcmfmac-awdl.conf" \

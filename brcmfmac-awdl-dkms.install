@@ -29,10 +29,14 @@ post_install() {
   setting up and puts the omdrop command on your PATH.
 
   awdl0 is created on demand the first time receiving is turned on, so no
-  service needs enabling. To have it exist from boot instead -- which makes the
-  receiver ready a second sooner and survives a Wi-Fi off/on -- enable:
+  service needs enabling. The first window after each boot then takes about a
+  minute to prove the radio transmits. To have that done at boot instead, so
+  the first window opens in seconds, enable:
 
-      systemctl enable --now awdl0.service
+      systemctl enable awdl-warmup.service
+
+  It leaves AWDL enabled from boot but advertises nothing. To create awdl0 at
+  boot without warming AWDL up, enable awdl0.service instead (not both).
 MSG
 }
 

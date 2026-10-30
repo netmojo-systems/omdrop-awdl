@@ -19,7 +19,11 @@ After=NetworkManager.service
 ConditionPathExists=/sys/module/brcmfmac
 
 [Service]
-Type=oneshot
+# Type=exec, not oneshot: awdl-up can wait a minute for the Wi-Fi interface,
+# and a oneshot holds multi-user.target that long. Services ordered after it,
+# power-profiles-daemon among them, then start late, and the desktop shell
+# waits on that one at login.
+Type=exec
 RemainAfterExit=yes
 ExecStart=/usr/lib/omdrop/awdl-up
 # awdl-up waits for the Wi-Fi interface itself; this bounds the whole attempt.
