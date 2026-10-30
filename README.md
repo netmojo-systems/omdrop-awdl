@@ -34,15 +34,17 @@ sudo modprobe -r brcmfmac_wcc brcmfmac brcmutil
 sudo modprobe brcmfmac
 ```
 
-Then enable the boot-time warm-up, so the first AirDrop window after each boot opens in seconds:
+The package also enables a boot-time warm-up, `awdl-warmup.service`, so the first AirDrop window after each boot opens in seconds. It takes effect from the next boot.
+
+Without it, the first window after a boot takes about a minute: the first AWDL session on a new `awdl0` doesn't transmit until AWDL has been switched off and on, and omdrop's transmit check spends that minute finding out. The warm-up creates `awdl0` and runs that check at boot, in the background, then leaves AWDL enabled. It advertises nothing: you aren't discoverable until a window opens.
+
+To turn it off:
 
 ```bash
-sudo systemctl enable awdl-warmup.service
+sudo systemctl mask awdl-warmup.service
 ```
 
-Without it, the first window after a boot takes about a minute: the first AWDL session on a new `awdl0` doesn't transmit until AWDL has been switched off and on, and omdrop's transmit check spends that minute finding out. `awdl-warmup.service` creates `awdl0` and runs that check at boot, in the background, then leaves AWDL enabled. It advertises nothing: you aren't discoverable until a window opens.
-
-To create `awdl0` at boot without the warm-up, enable `awdl0.service` instead. Enable one or the other, not both.
+To create `awdl0` at boot without the warm-up, mask it as above and run `sudo systemctl enable awdl0.service`.
 
 If a kernel update breaks the DKMS build, the stock `brcmfmac` loads instead: DKMS sets the kernel's own driver aside only when its build installs, and puts it back when the package is removed. You lose AWDL, not the network.
 
@@ -67,7 +69,7 @@ On a kernel whose own `brcmfmac` already has this AWDL support, DKMS skips the b
 | `/usr/lib/omdrop/*.py` | Helpers for the tools above |
 | `/usr/share/polkit-1/actions/org.omarchy.omdrop.policy` | Lets a local desktop session run `omdrop-discoverable` without a password |
 | `/usr/lib/omdrop/awdl-warmup` | Creates `awdl0` and proves it transmits once; run at boot by `awdl-warmup.service` |
-| `/usr/lib/systemd/system/awdl-warmup.service` | Boot-time `awdl0` setup and warm-up; not enabled by the install |
+| `/usr/lib/systemd/system/awdl-warmup.service` | Boot-time `awdl0` setup and warm-up; enabled by the install |
 | `/usr/lib/systemd/system/awdl0.service` | Boot-time `awdl0` setup without the warm-up; not enabled by the install |
 | `/usr/lib/modprobe.d/brcmfmac-awdl.conf` | `debug=0x1000`, the firmware-interface bit of the debug mask; the data-path check doesn't depend on it |
 | `/usr/lib/NetworkManager/conf.d/99-awdl-unmanaged.conf` | Keeps NetworkManager off `awdl0` |

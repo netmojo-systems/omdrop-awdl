@@ -138,6 +138,11 @@ package() {
     "${pkgdir}/usr/lib/systemd/system/awdl0.service"
   install -Dm644 "${startdir}/packaging/awdl-warmup.service" \
     "${pkgdir}/usr/lib/systemd/system/awdl-warmup.service"
+  # Enabled by default, as a vendor wants link: `systemctl mask
+  # awdl-warmup.service` turns it off, and a package upgrade leaves that alone.
+  install -d "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants"
+  ln -s ../awdl-warmup.service \
+    "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants/awdl-warmup.service"
   # Vendor directories, not /etc: both are read after the package's own copy is
   # in place, and both leave an /etc override to the person running the machine.
   install -Dm644 "${startdir}/packaging/brcmfmac-awdl.conf" \

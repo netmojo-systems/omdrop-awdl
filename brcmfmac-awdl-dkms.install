@@ -28,15 +28,11 @@ post_install() {
   Then turn Omdrop on from its icon in the bar. The first time, it finishes
   setting up and puts the omdrop command on your PATH.
 
-  awdl0 is created on demand the first time receiving is turned on, so no
-  service needs enabling. The first window after each boot then takes about a
-  minute to prove the radio transmits. To have that done at boot instead, so
-  the first window opens in seconds, enable:
+  awdl0 is created at boot and AWDL warmed up in the background by
+  awdl-warmup.service, so the first window after a boot opens in seconds.
+  It advertises nothing. To turn it off:
 
-      systemctl enable awdl-warmup.service
-
-  It leaves AWDL enabled from boot but advertises nothing. To create awdl0 at
-  boot without warming AWDL up, enable awdl0.service instead (not both).
+      systemctl mask awdl-warmup.service
 MSG
 }
 

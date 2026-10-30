@@ -1,7 +1,8 @@
 # awdl0 at boot, warmed up: the first discoverability window opens in seconds
 # instead of about a minute. Creates awdl0 like awdl0.service, then proves the
-# radio transmits once and leaves AWDL enabled. Advertises nothing. Enable this
-# or awdl0.service, not both.
+# radio transmits once and leaves AWDL enabled. Advertises nothing. The package
+# enables it; `systemctl mask awdl-warmup.service` turns it off. To create awdl0
+# at boot without the warm-up, mask this and enable awdl0.service.
 #
 # Type=exec: the warm-up can take a minute or two, and a oneshot would hold
 # multi-user.target that long. Services ordered after it, power-profiles-daemon
