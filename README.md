@@ -192,7 +192,7 @@ Nothing is required. The helpers read the MAC, Wi-Fi interface, and hostname at 
 
 ## Wi-Fi joins and iwd
 
-On an M1 Pro (BCM4387), joining a network that offers WPA2 and WPA3 through iwd keeps timing out with `status 16`, and NetworkManager reports each timeout as a missing password, so the Wi-Fi panel keeps asking for a password that is correct. NetworkManager's wpa_supplicant backend joins on the first attempt on the same machine and network. omarchy-mac makes iwd the default on these Macs ([omarchy-mac-pkgs#80](https://github.com/omacom/omarchy-mac-pkgs/issues/80)). This affects Wi-Fi, not AirDrop. To use wpa_supplicant instead:
+Joining a network that offers WPA2 and WPA3 through iwd keeps timing out with `status 16`, and NetworkManager reports each timeout as a missing password, so the Wi-Fi panel keeps asking for a password that is correct. NetworkManager's wpa_supplicant backend joins on the first attempt on the same machine and network. omarchy-mac makes iwd the default on these Macs ([omarchy-mac-pkgs#80](https://github.com/omacom/omarchy-mac-pkgs/issues/80)). This affects Wi-Fi, not AirDrop. To use wpa_supplicant instead:
 
 ```bash
 printf '[device]\nwifi.backend=wpa_supplicant\n' | sudo tee /etc/NetworkManager/conf.d/90-wifi-backend.conf
