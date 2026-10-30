@@ -31,8 +31,11 @@ iovar_len(){ echo "${STUB_PLEN:-0}"; }
 iovar_set(){ log "iovar_set $*"; }
 gate(){
   log gate
-  # The test looks at the locks while the gate runs.
-  if [[ -n ${STUB_GATE_SLEEP:-} ]]; then touch "$RUN/in-gate"; sleep "$STUB_GATE_SLEEP"; fi
+  # The test looks at the locks while the gate runs, and ends it.
+  if [[ -n ${STUB_GATE_HOLD:-} ]]; then
+    touch "$RUN/in-gate"
+    while [[ ! -e $RUN/gate-done ]]; do sleep 0.02; done
+  fi
   return "${STUB_GATE_RC:-0}"
 }
 '''
@@ -164,10 +167,11 @@ class WarmupTests(WarmupHarness):
         # A start tells the warm-up from another start by warmup.lock.
         (self.stub / "awdl0").touch()
         run = self.stub / "run"
-        warmup = self.spawn_warmup(STUB_GATE_SLEEP="1")
+        warmup = self.spawn_warmup(STUB_GATE_HOLD="1")
         wait_until(self, lambda: (run / "in-gate").exists(), "the gate never ran")
         self.assertTrue(held(run / "start.lock"))
         self.assertTrue(held(run / "warmup.lock", shared=True))
+        (run / "gate-done").touch()
         self.assertEqual(warmup.wait(timeout=10), 0)
         self.assertFalse(held(run / "start.lock"))
         self.assertFalse(held(run / "warmup.lock"))
@@ -255,20 +259,23 @@ class StartWaitsForWarmupTests(WarmupHarness):
         self.fragments = "\n".join(function(source, n) for n in
                                    ("is_uint", "is_duration", "warmup_running", "cmd_start"))
 
-    def other_start(self, seconds):
-        # Another start: it holds the start lock and nothing else.
-        holder = subprocess.Popen(["flock", str(self.run / "start.lock"), "sleep", seconds])
-        self.addCleanup(holder.wait)
-        self.addCleanup(holder.kill)
+    def other_start(self):
+        # Another start: it holds the start lock, and nothing else, until the
+        # test creates $RUN/other-done.
+        holder = subprocess.Popen(["flock", str(self.run / "start.lock"), "sh", "-c",
+                                   f'while [ ! -e "{self.run}/other-done" ]; do sleep 0.02; done'])
+        # Run last-first: release it, then wait for it, before $RUN goes.
+        self.addCleanup(holder.wait, timeout=10)
+        self.addCleanup((self.run / "other-done").touch)
         wait_until(self, lambda: held(self.run / "start.lock"), "the other start never took the lock")
         return holder
 
-    def start(self):
+    def spawn_start(self):
         script = f'''
 set -uo pipefail
 RUN={self.run}
 WARMUP_WAIT=10
-log(){{ printf '%s\\n' "$*" >&2; }}
+log(){{ printf '%s\\n' "$*" >&2; printf '%s\\n' "$*" >> "$RUN/log"; }}
 die(){{ local rc=$1; shift; log "$*"; exit "$rc"; }}
 need_root(){{ :; }}
 now(){{ date +%s; }}
@@ -278,21 +285,37 @@ supervisor_alive(){{ return 0; }}
 {self.fragments}
 cmd_start 600
 '''
+        return subprocess.Popen(["bash", "-c", script], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+
+    def start(self):
         began = time.monotonic()
-        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+        result = self.finish(self.spawn_start())
         return result, time.monotonic() - began
 
+    def start_waiting_for_warmup(self):
+        start = self.spawn_start()
+        self.addCleanup(start.kill)
+        log = self.run / "log"
+        wait_until(self, lambda: log.exists() and "waiting for the boot-time warm-up" in log.read_text(),
+                   "the start never waited for the warm-up", seconds=10)
+        return start
+
+    def finish(self, start):
+        out, err = start.communicate(timeout=30)
+        return subprocess.CompletedProcess([], start.returncode, out, err)
+
     def test_a_start_during_the_warmup_waits_for_it(self):
-        self.spawn_warmup(STUB_GATE_SLEEP="1.5")
+        self.spawn_warmup(STUB_GATE_HOLD="1")
         wait_until(self, lambda: (self.run / "in-gate").exists(), "the gate never ran")
-        result, took = self.start()
-        self.assertIn("waiting for the boot-time warm-up", result.stderr)
+        start = self.start_waiting_for_warmup()
+        (self.run / "gate-done").touch()
+        result = self.finish(start)
         self.assertIn("window extended", result.stderr)
         self.assertNotIn("not racing it", result.stderr)
-        self.assertGreaterEqual(took, 1.0)
 
     def test_a_start_during_another_start_still_refuses_at_once(self):
-        self.other_start("8")
+        self.other_start()
         result, took = self.start()
         self.assertEqual(result.returncode, 5)
         self.assertIn("another start is already in its gate", result.stderr)
@@ -302,16 +325,15 @@ cmd_start 600
         # The warm-up holds warmup.lock while it waits for the start lock, so
         # a start then waits too rather than refusing (review 1029). Whichever
         # gets the lock after the other start, this start ends up past it.
-        other = self.other_start("1")
+        self.other_start()
         self.spawn_warmup(AWDL_WARMUP_LOCK_WAIT="10")
         wait_until(self, lambda: held(self.run / "warmup.lock", shared=True),
                    "the warm-up never took warmup.lock")
-        result, _ = self.start()
-        self.assertIn("waiting for the boot-time warm-up", result.stderr)
+        start = self.start_waiting_for_warmup()
+        (self.run / "other-done").touch()
+        result = self.finish(start)
         self.assertIn("window extended", result.stderr)
         self.assertNotIn("not racing it", result.stderr)
-        other.wait()
-
 
 if __name__ == "__main__":
     unittest.main()
