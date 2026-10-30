@@ -40,7 +40,7 @@ Then enable the boot-time warm-up, so the first AirDrop window after each boot o
 sudo systemctl enable awdl-warmup.service
 ```
 
-Without it, the first window after a boot takes about a minute: the first AWDL session on a new `awdl0` doesn't transmit until AWDL has been switched off and on, and omdrop's transmit check spends that minute finding out. `awdl-warmup.service` creates `awdl0` and runs that check at boot, in the background, then leaves AWDL enabled. It advertises nothing: you aren't discoverable until a window opens. The cost is AWDL's channel schedule running from boot rather than from the first window.
+Without it, the first window after a boot takes about a minute: the first AWDL session on a new `awdl0` doesn't transmit until AWDL has been switched off and on, and omdrop's transmit check spends that minute finding out. `awdl-warmup.service` creates `awdl0` and runs that check at boot, in the background, then leaves AWDL enabled. It advertises nothing: you aren't discoverable until a window opens.
 
 To create `awdl0` at boot without the warm-up, enable `awdl0.service` instead. Enable one or the other, not both.
 
