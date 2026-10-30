@@ -34,17 +34,23 @@ sudo modprobe -r brcmfmac_wcc brcmfmac brcmutil
 sudo modprobe brcmfmac
 ```
 
-Then enable boot-time setup, which creates `awdl0` without enabling AWDL or advertising anything:
+The package also enables a boot-time warm-up, `awdl-warmup.service`, so the first AirDrop window after each boot opens in seconds. It takes effect from the next boot.
+
+Without it, the first window after a boot takes about a minute: the first AWDL session on a new `awdl0` doesn't transmit until AWDL has been switched off and on, and omdrop's transmit check spends that minute finding out. The warm-up creates `awdl0` and runs that check at boot, in the background, then leaves AWDL enabled. Its probe frames carry no AirDrop records, so it announces no service and no host name: you aren't discoverable until a window opens.
+
+To turn it off:
 
 ```bash
-sudo systemctl enable --now awdl0.service
+sudo systemctl mask awdl-warmup.service
 ```
+
+To create `awdl0` at boot without the warm-up, mask it as above and run `sudo systemctl enable awdl0.service`. If you enabled `awdl0.service` before the warm-up existed, you can leave it enabled: the two don't interfere.
 
 If a kernel update breaks the DKMS build, the stock `brcmfmac` loads instead: DKMS sets the kernel's own driver aside only when its build installs, and puts it back when the package is removed. You lose AWDL, not the network.
 
 On a kernel whose own `brcmfmac` already has this AWDL support, DKMS skips the build and that kernel's driver stays in use. The check looks for either of two module parameters: `awdl_create_flags`, which 0004 adds, or `awdl`, the on/off switch that replaced it upstream. With `awdl=0`, `omdrop doctor` says AirDrop is turned off in the driver.
 
-- **`linux-aurora` 7.2.11** is such a kernel. Its `brcmfmac` has `awdl` and no `awdl_create_flags`. It also has `awdl_trace` (0009, [#213](https://github.com/aurora-silicon/linux/pull/213)), so windows prove transmit before they open, as with this package's module. Its AWDL create and destroy commands match the ones the helpers send. Sending and receiving on it haven't been tested on hardware yet (#56).
+- **`linux-aurora` 7.2.11** is such a kernel. Its `brcmfmac` has `awdl` and no `awdl_create_flags`. It also has `awdl_trace` (0009, [#213](https://github.com/aurora-silicon/linux/pull/213)), so windows prove transmit before they open, as with this package's module. Its AWDL create and destroy commands match the ones the helpers send.
 - **A kernel built from `aurora-wip` as of #183** carries 0001–0008 with the same patch IDs and drives the interface the helpers use. It lacks 0009, so windows there open with transmit and receive unproven, and a radio that has stopped transmitting isn't caught before the window opens. Receive is still confirmed once data frames arrive.
 - **Neither has 0010–0014, which are instrumentation:** the firmware RAM snapshot (`brcm_iovar.py awdl-if fwdump`), and the action-frame forwarding that `awdl-resolve` and `airdrop-send.py --af-log` read. Sending, receiving and naming peers don't need them.
 
@@ -62,7 +68,9 @@ On a kernel whose own `brcmfmac` already has this AWDL support, DKMS skips the b
 | `/usr/lib/omdrop/awdl-resolve` | Reads a peer's advertised AirDrop service from its action frames |
 | `/usr/lib/omdrop/*.py` | Helpers for the tools above |
 | `/usr/share/polkit-1/actions/org.omarchy.omdrop.policy` | Lets a local desktop session run `omdrop-discoverable` without a password |
-| `/usr/lib/systemd/system/awdl0.service` | Boot-time `awdl0` setup; not enabled by the install |
+| `/usr/lib/omdrop/awdl-warmup` | Creates `awdl0` and proves it transmits once; run at boot by `awdl-warmup.service` |
+| `/usr/lib/systemd/system/awdl-warmup.service` | Boot-time `awdl0` setup and warm-up; enabled by the install |
+| `/usr/lib/systemd/system/awdl0.service` | Boot-time `awdl0` setup without the warm-up; not enabled by the install |
 | `/usr/lib/modprobe.d/brcmfmac-awdl.conf` | `debug=0x1000`, the firmware-interface bit of the debug mask; the data-path check doesn't depend on it |
 | `/usr/lib/NetworkManager/conf.d/99-awdl-unmanaged.conf` | Keeps NetworkManager off `awdl0` |
 | `/usr/share/doc/brcmfmac-awdl-dkms/` | This README, and an optional `10-wld0.link` the package doesn't activate |
@@ -183,6 +191,18 @@ Nothing is required. The helpers read the MAC, Wi-Fi interface, and hostname at 
 | `chan-shape` | `dense` | Slot density: `sparse`, `dense`, `full`, `dense44`, or `mirror` |
 | `election-metric` | `100` | Election metric advertised and enforced |
 | `rssi-sync-threshold` | firmware default | dBm floor for adopting a peer as root; `-60` keeps the election to the room |
+
+## Wi-Fi joins and iwd
+
+Joining a network that offers WPA2 and WPA3 through iwd keeps timing out with `status 16`, and NetworkManager reports each timeout as a missing password, so the Wi-Fi panel keeps asking for a password that is correct. NetworkManager's wpa_supplicant backend joins on the first attempt on the same machine and network. omarchy-mac makes iwd the default on these Macs ([omarchy-mac-pkgs#80](https://github.com/omacom/omarchy-mac-pkgs/issues/80)). This affects Wi-Fi, not AirDrop. To use wpa_supplicant instead:
+
+```bash
+printf '[device]\nwifi.backend=wpa_supplicant\n' | sudo tee /etc/NetworkManager/conf.d/90-wifi-backend.conf
+sudo systemctl mask --now iwd.service
+sudo systemctl restart NetworkManager
+```
+
+To go back, delete that file, run `sudo systemctl unmask iwd.service`, and restart NetworkManager.
 
 ## Power
 

@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Boot-time AWDL warm-up, run by awdl-warmup.service: create awdl0 and run the
+# data-path gate once, so the first discoverability window opens in seconds.
+#
+# The first AWDL session on a new awdl0 doesn't transmit until awdl has been
+# toggled off and on, and the gate spends 70-80 s finding that out. Once a
+# session has transmitted and awdl stays enabled, every later window passes
+# the gate's first probe. Turning awdl off again undoes that, so this leaves it
+# enabled, as stopping a window does.
+#
+# It advertises nothing: no template or identity, and the gate's 20-frame
+# probes carry no mDNS records (PROBE_NEUTRAL). It holds the start lock, and
+# warmup.lock for as long as it might: a window opened during boot finds that
+# lock held and waits for the warm-up instead of interleaving iovars with it or
+# failing.
+#
+# Exit 0: transmitting, or a window already ran (a template is loaded).
+#      1: the gate never saw transmit; the next window runs it again.
+#      2: not root, or the library is missing.
+#      3: the start lock stayed held.
+#      4: no awdl0.
+set -uo pipefail
+umask 022
+LIB="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck source=omdrop-broadcom.sh
+. "$LIB/omdrop-broadcom.sh" || { echo "$0: cannot read $LIB/omdrop-broadcom.sh" >&2; exit 2; }
+hook_mode
+need_root
+need_run_dir
+
+# warmup.lock is how a start tells us from another start: it is held whenever
+# the start lock is ours, so a start that finds the start lock held and this
+# one held too waits instead of failing. Taken first and let go of last; a
+# start only takes it shared, for an instant, to look. On exit the start lock
+# is let go of first: the trap does it, and on a kill the kernel closes the
+# lower descriptor first.
+exec 9>"$RUN/warmup.lock"
+flock -w 10 9 || die 3 "warm-up: another warm-up is running"
+exec 8>"$RUN/start.lock"
+flock -w "${AWDL_WARMUP_LOCK_WAIT:-120}" 8 || die 3 "warm-up: the start lock stayed held; skipping"
+trap 'flock -u 8; flock -u 9' EXIT
+
+t0=$(now)
+awdl0_ready || timeout --foreground 60 "$LIB/awdl-up" >/dev/null 2>&1
+# awdl0.service may still be inside its own awdl-up, writing the schedule into
+# an awdl0 that already exists; wait for it, and keep it out until the gate is
+# done. awdl-up takes this lock itself, so it is taken only after our call.
+exec 7>"${AWDL_UP_LOCK:-/run/awdl-up.lock}"
+flock -w 180 7 || die 3 "warm-up: awdl-up held its lock for 180 s; skipping"
+awdl0_ready || die 4 "warm-up: no awdl0"
+# A loaded template means a window already ran: awdl is warm, and the gate
+# must not retoggle awdl with one loaded (023513Z).
+plen=$(iovar_len awdl_payload 512)
+if [[ ${plen:-0} -gt 0 ]]; then
+  log "warm-up: a window already ran (awdl_payload len $plen); nothing to do"
+  exit 0
+fi
+PROBE_NEUTRAL=1 gate; rc=$?
+log "warm-up: gate rc=$rc after $(( $(now) - t0 ))s; awdl left enabled"
+exit "$rc"

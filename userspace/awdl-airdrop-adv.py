@@ -37,6 +37,10 @@ traffic addressed to us specifically, not to 33:33:*.
 Sent as unsolicited authoritative responses, which is what an mDNS announcement
 is. Names are uncompressed; Apple's parser handles that fine and compression
 here would buy nothing but bugs.
+
+--neutral sends the same frames with no records in them: the gate's transmit
+probe when no window is open (the boot warm-up), which must not announce an
+AirDrop service or this machine's name.
 """
 import argparse, os, socket, struct, sys, time
 
@@ -90,6 +94,11 @@ def announcement(sid, host, port, flags, ll):
     return struct.pack('!HHHHHH', 0, 0x8400, 0, 4, 0, 0) + ans
 
 
+def empty_response():
+    """An mDNS response with no records: it names no service and no host."""
+    return struct.pack('!HHHHHH', 0, 0x8400, 0, 0, 0, 0)
+
+
 def udp6(src, dst, payload):
     udp_len = 8 + len(payload)
     pseudo = src + dst + struct.pack('!IHBB', udp_len, 0, 0, 17)
@@ -116,32 +125,38 @@ def main():
     ap.add_argument('--seq', type=int, default=0)
     ap.add_argument('--port', type=int, default=8771)
     ap.add_argument('--flags', type=int, default=0x3fb)
-    ap.add_argument('--host', default=f'{ident.awdl_host()}.local')
+    ap.add_argument('--host', default=None, help='defaults to the AWDL host name')
     ap.add_argument('--service-id', default=None,
                     help='12 hex chars; defaults to the awdl0 MAC')
     ap.add_argument('--plain', action='store_true',
                     help='Ethernet II instead of SNAP -- the negative control')
+    ap.add_argument('--neutral', action='store_true',
+                    help='no records: a transmit probe that names no service or host')
     ap.add_argument('--dump', action='store_true')
     a = ap.parse_args()
 
     mac = bytes.fromhex(open(f'/sys/class/net/{a.iface}/address').read().strip().replace(':', ''))
-    sid = a.service_id or mac.hex()
     ll = eui64_ll(mac)
     dst6 = socket.inet_pton(socket.AF_INET6, 'ff02::fb')
-    payload = udp6(ll, dst6, announcement(sid, a.host, a.port, a.flags, ll))
     kind = 'EthernetII' if a.plain else 'AppleSNAP'
+    if a.neutral:
+        payload = udp6(ll, dst6, empty_response())
+        what = 'transmit probe, no records'
+    else:
+        sid = a.service_id or mac.hex()
+        host = a.host or f'{ident.awdl_host()}.local'
+        payload = udp6(ll, dst6, announcement(sid, host, a.port, a.flags, ll))
+        what = (f'advertising {sid}._airdrop._tcp.local -> {host}:{a.port} '
+                f'flags=0x{a.flags:x}')
 
     if a.dump:
         f = wrap(mac, payload, a.seq, snap=not a.plain)
-        print(f'{kind} {len(f)}B  {sid}._airdrop._tcp.local -> {a.host}:{a.port} '
-              f'flags={a.flags} (0x{a.flags:x})')
+        print(f'{kind} {len(f)}B  {what}')
         for i in range(0, len(f), 16):
             print(f'  {i:04x}  ' + ' '.join(f'{b:02x}' for b in f[i:i + 16]))
         raise SystemExit(0)
 
-    print(f'{a.iface}: {kind}  advertising {sid}._airdrop._tcp.local '
-          f'-> {a.host}:{a.port} flags=0x{a.flags:x} from '
-          f'{socket.inet_ntop(socket.AF_INET6, ll)}')
+    print(f'{a.iface}: {kind}  {what} from {socket.inet_ntop(socket.AF_INET6, ll)}')
 
     s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
     s.bind((a.iface, 0))

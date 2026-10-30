@@ -26,6 +26,8 @@ SUPERVISOR_UID=0
 # expected failure rate (~1 in 8) stops improving faster than the user's
 # patience degrades.
 ENABLES=${AWDL_GATE_ENABLES:-3}
+# How long a start waits for the boot-time warm-up's gate (awdl-warmup).
+WARMUP_WAIT=${AWDL_WARMUP_WAIT:-180}
 
 # stderr always; the file only when /run/awdl-discoverable exists and is ours
 # (status runs as the user, and a noisy tee failure is not a status result).
@@ -197,12 +199,17 @@ nm_release(){
 # back. Without this the gate reads 0 completions on a perfectly healthy radio
 # and every window fails as parked (2026-09-18: that is what happened for
 # twenty minutes after the parameter shipped).
+#
+# The probe frames are AirDrop announcements, unless PROBE_NEUTRAL is set: the
+# boot warm-up runs the gate with no window open, and sends the same frames
+# with no records, so it announces no service and no host name.
 TRACE=/sys/module/brcmfmac/parameters/awdl_trace
 probe_completions(){
   local was= n
   if [[ -w $TRACE ]]; then was=$(cat "$TRACE" 2>/dev/null); printf 1 > "$TRACE"; fi
   dmesg -C
-  if ! python3 "$LIB/awdl-airdrop-adv.py" --iface "$IF" --count 20 --interval 0.02 --seq 9000 >/dev/null 2>&1; then
+  if ! python3 "$LIB/awdl-airdrop-adv.py" --iface "$IF" --count 20 --interval 0.02 --seq 9000 \
+       ${PROBE_NEUTRAL:+--neutral} >/dev/null 2>&1; then
     [[ -n $was ]] && printf '%s' "$was" > "$TRACE"
     return 1
   fi

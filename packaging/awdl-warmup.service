@@ -1,0 +1,29 @@
+# awdl0 at boot, warmed up: the first discoverability window opens in seconds
+# instead of about a minute. Creates awdl0 like awdl0.service, then proves the
+# radio transmits once and leaves AWDL enabled. Its probe frames carry no
+# AirDrop records, so it advertises nothing. The package
+# enables it; `systemctl mask awdl-warmup.service` turns it off. It can run
+# beside awdl0.service, which earlier versions told users to enable: awdl-up
+# takes a lock, so whichever runs second finds awdl0 already there.
+#
+# Type=exec: the warm-up can take a minute or two, and a oneshot would hold
+# multi-user.target that long. Services ordered after it, power-profiles-daemon
+# among them, would start late, and the desktop shell waits on that one at
+# login.
+
+[Unit]
+Description=Create awdl0 and warm up AWDL so the first AirDrop window opens quickly
+Documentation=https://github.com/netmojo-systems/omdrop-awdl
+After=NetworkManager.service
+ConditionPathExists=/sys/module/brcmfmac
+
+[Service]
+Type=exec
+ExecStart=/usr/lib/omdrop/awdl-warmup
+TimeoutStartSec=infinity
+TimeoutStopSec=30
+# A boot without a warm-up is a slower first window, nothing worse.
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

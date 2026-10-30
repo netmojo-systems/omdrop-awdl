@@ -222,6 +222,12 @@ RELOAD=0
 [[ ${1:-} == --reload ]] && RELOAD=1
 [[ $EUID -eq 0 ]] || { echo "needs root" >&2; exit 1; }
 
+# One awdl-up at a time: awdl0.service and awdl-warmup.service can both run it
+# at boot, and two creates or schedule writes interleaved would leave awdl0
+# half-configured. The second waits, then finds awdl0 present.
+exec 8>"${AWDL_UP_LOCK:-/run/awdl-up.lock}"
+flock -w 180 8 || { log "another awdl-up held its lock for 180 s; giving up"; exit 6; }
+
 # NM must not manage awdl0: a managed awdl0 gets a randomised MAC and no
 # link-local, which voids every address the peers target. The package ships the
 # vendor copy; this only writes /etc when neither file is present, so a removed
