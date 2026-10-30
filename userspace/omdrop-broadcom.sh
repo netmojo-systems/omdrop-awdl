@@ -847,18 +847,6 @@ cmd_trace(){
 # hook_mode: every hook calls it right after sourcing this file. Core copies a
 # hook's stderr into $RUN/log with the timestamp kept, so a hook logs to stderr
 # only; appending to the file as well would log every line twice.
-# Whether the boot-time warm-up (awdl-warmup) is running: it holds warmup.lock
-# for as long as it holds the start lock, and a little longer. Looked at with a
-# shared lock taken and dropped at once, which the warm-up's own wait for it
-# allows. 75 is flock's answer for "held"; any other failure is not the
-# warm-up.
-warmup_running(){
-  [[ -e $RUN/warmup.lock ]] || return 1
-  local rc=0
-  flock -s -n -E 75 "$RUN/warmup.lock" true 2>/dev/null || rc=$?
-  (( rc == 75 ))
-}
-
 hook_mode(){
   log(){ printf '%s\n' "$(date -u +%H:%M:%SZ) $*" >&2; }
   set_reason(){ :; }

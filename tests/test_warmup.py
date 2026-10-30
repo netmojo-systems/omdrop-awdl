@@ -257,7 +257,7 @@ class StartWaitsForWarmupTests(WarmupHarness):
         (self.run / "until").write_text("0")
         source = DISCOVERABLE.read_text() + BROADCOM.read_text()
         self.fragments = "\n".join(function(source, n) for n in
-                                   ("is_uint", "is_duration", "warmup_running", "cmd_start"))
+                                   ("is_uint", "is_duration", "cmd_start"))
 
     def other_start(self):
         # Another start: it holds the start lock, and nothing else, until the
@@ -270,10 +270,27 @@ class StartWaitsForWarmupTests(WarmupHarness):
         wait_until(self, lambda: held(self.run / "start.lock"), "the other start never took the lock")
         return holder
 
-    def spawn_start(self):
+    def spawn_start(self, pause_at=""):
+        # pause_at stops the start just before a flock and waits for the test
+        # to create $RUN/resume: "guard" before it looks at warmup.lock,
+        # "second" before its second try for the start lock. The flock itself
+        # is the real one.
         script = f'''
 set -uo pipefail
 RUN={self.run}
+PAUSE_AT={pause_at}
+tries=0
+pause(){{ touch "$RUN/paused"; while [[ ! -e $RUN/resume ]]; do sleep 0.02; done; }}
+flock(){{
+  local args="$*"
+  case $PAUSE_AT in
+    guard) [[ $args == *-s* ]] && pause ;;
+    second) if [[ $args == *-n* && ${{args##* }} == 9 ]]; then
+              tries=$((tries + 1)); (( tries == 2 )) && pause
+            fi ;;
+  esac
+  command flock "$@"
+}}
 WARMUP_WAIT=10
 log(){{ printf '%s\\n' "$*" >&2; printf '%s\\n' "$*" >> "$RUN/log"; }}
 die(){{ local rc=$1; shift; log "$*"; exit "$rc"; }}
@@ -320,6 +337,54 @@ cmd_start 600
         self.assertEqual(result.returncode, 5)
         self.assertIn("another start is already in its gate", result.stderr)
         self.assertLess(took, 1.0)
+        # It found no warmup.lock and made one rather than reading its
+        # absence as "no warm-up": a warm-up could make it a moment later.
+        self.assertTrue((self.run / "warmup.lock").exists())
+
+    def paused(self, start):
+        self.addCleanup(start.kill)
+        wait_until(self, lambda: (self.run / "paused").exists(), "the start never paused")
+
+    def test_a_warmup_letting_go_of_both_locks_between_the_looks(self):
+        # The start's first try fails while the warm-up holds both locks; the
+        # warm-up then finishes before the start looks at warmup.lock (review
+        # 1029, schedule a). The start finds both free and opens its window.
+        self.spawn_warmup(STUB_GATE_HOLD="1")
+        wait_until(self, lambda: (self.run / "in-gate").exists(), "the gate never ran")
+        start = self.spawn_start(pause_at="guard")
+        self.paused(start)
+        (self.run / "gate-done").touch()
+        wait_until(self, lambda: not held(self.run / "start.lock"), "the warm-up never let go")
+        (self.run / "resume").touch()
+        result = self.finish(start)
+        self.assertIn("window extended", result.stderr)
+        self.assertNotIn("not racing it", result.stderr)
+
+    def test_a_warmup_cannot_take_the_locks_between_the_looks(self):
+        # Another start holds the start lock and warmup.lock does not exist.
+        # This start makes it, takes it shared and stops before its second
+        # try. The other start lets go without a window and the warm-up
+        # starts (review 1029, schedule b). Holding warmup.lock keeps the
+        # warm-up out until that try, so the try takes the start lock rather
+        # than finding the warm-up there and calling it another start.
+        self.assertFalse((self.run / "warmup.lock").exists())
+        other = self.other_start()
+        start = self.spawn_start(pause_at="second")
+        self.paused(start)
+        (self.run / "other-done").touch()
+        other.wait(timeout=10)
+        self.spawn_warmup(STUB_GATE_HOLD="1", AWDL_WARMUP_LOCK_WAIT="10")
+        self.addCleanup((self.run / "gate-done").touch)
+        # Long enough for an unblocked warm-up to reach its gate.
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and not (self.run / "in-gate").exists():
+            time.sleep(0.02)
+        self.assertFalse((self.run / "in-gate").exists(), "the warm-up took the start lock between the looks")
+        (self.run / "resume").touch()
+        result = self.finish(start)
+        # Past the lock, the fixture's window is up and is extended.
+        self.assertIn("window extended", result.stderr)
+        self.assertNotIn("not racing it", result.stderr)
 
     def test_a_warmup_queued_behind_another_start_makes_a_start_wait(self):
         # The warm-up holds warmup.lock while it waits for the start lock, so

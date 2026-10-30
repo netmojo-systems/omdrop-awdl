@@ -385,19 +385,36 @@ cmd_start(){
   if ! flock -n 9; then
     # The boot-time warm-up holds the lock for its gate, and a window opened
     # right after login should wait for it, not fail: once it ends, this
-    # start's first probe passes. It holds warmup.lock whenever it holds this
-    # one, and lets go of this one first, so a holder seen with warmup.lock
-    # free is another start, unless the warm-up let go of both between the
-    # two looks: the lock is tried once more for that.
-    if warmup_running; then
+    # start's first probe passes. It holds warmup.lock, taken first and let go
+    # of last, whenever it holds this one. So: warmup.lock busy means the
+    # warm-up, and this start waits. Free, it is held shared while the start
+    # lock is tried once more, which keeps a warm-up from taking both in
+    # between; only then is a holder another start. The file may not exist
+    # yet: it is created, never read as "no warm-up". A failure to look is
+    # not proof of another start either, so it exits 3, not 5.
+    local rc=0
+    { exec 8>>"$RUN/warmup.lock"; } 2>/dev/null || die 3 "cannot open $RUN/warmup.lock; try again"
+    flock -s -n -E 75 8 || rc=$?
+    if (( rc == 75 )); then
+      exec 8>&-
       log "waiting for the boot-time warm-up to finish"
       # 3, not 5: no window opened, and 5 reads as "already starting".
       flock -w "$WARMUP_WAIT" 9 || { log "the boot-time warm-up held the start lock for ${WARMUP_WAIT}s; try again"; exit 3; }
-    elif ! flock -n 9; then
-      log "another start is already in its gate; not racing it"
-      exit 5
+    elif (( rc != 0 )); then
+      exec 8>&-
+      die 3 "cannot lock $RUN/warmup.lock; try again"
+    else
+      flock -n -E 75 9 || rc=$?
+      exec 8>&-
+      if (( rc == 75 )); then
+        log "another start is already in its gate; not racing it"
+        exit 5
+      elif (( rc != 0 )); then
+        die 3 "cannot take the start lock; try again"
+      fi
     fi
   fi
+
 
 
   # A window omdrop-core's helper opened is not ours to extend or replace:
