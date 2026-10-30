@@ -11,7 +11,7 @@
 # skips the build entirely (see dkms.conf.in).
 
 pkgname=brcmfmac-awdl-dkms
-pkgver=0.10.3
+pkgver=0.10.4
 pkgrel=1
 _asahitag=asahi-7.2.12-2
 pkgdesc="AWDL (AirDrop link layer) support for Apple Broadcom Wi-Fi (BCM4378, BCM4387, BCM4388): DKMS module and root helpers"
@@ -75,7 +75,7 @@ source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz"
         "0016-wifi-brcmfmac-report-port-authorization-only-after-t.patch")
 # The tarball's hash is filled in once its tag is pushed; the patches are
 # hashed here.
-sha256sums=('8d867bdf1ab39ecb14b255a2ebd28eebaa7054edfe652ca6fc9ae2f7fdf91754'
+sha256sums=('88953e32011f0a30b481034ff2e30b27244a3c7b7378cacb1e94f0c6bb1c24cb'
             '0b78df75c28fff13fcd3521f98313acc20741d7f54e3f53757e7fad26a9ac123'
             '37e42830356a982cd68ef4b8455e1abfdac33f0de30702e7301ea3d18877c0ca'
             '6da0322a1193c5932d8496ba2d4c75ec5c9606bde7a01c0b7beea2f820c5ab78'
@@ -142,6 +142,7 @@ package() {
   sed "s/@VERSION@/${pkgver}/" "${srcdir}/omdrop-awdl-${pkgver}/userspace/radio/probe" > "${lib}/radio/probe"
   chmod 755 "${lib}/radio/probe"
   install -Dm755 "${srcdir}/omdrop-awdl-${pkgver}/userspace/awdl-up" "${lib}/awdl-up"
+  install -Dm755 "${srcdir}/omdrop-awdl-${pkgver}/userspace/awdl-warmup" "${lib}/awdl-warmup"
   local helper
   for helper in awdl-airdrop-adv awdl-election awdl-mdns-respond awdl-peer-watch \
                 awdl-peers awdl-stats ble-airdrop-adv brcm_iovar mkpsf \
@@ -164,6 +165,13 @@ package() {
     "${pkgdir}/usr/share/polkit-1/actions/org.omarchy.omdrop.policy"
   install -Dm644 "${srcdir}/omdrop-awdl-${pkgver}/packaging/awdl0.service" \
     "${pkgdir}/usr/lib/systemd/system/awdl0.service"
+  install -Dm644 "${srcdir}/omdrop-awdl-${pkgver}/packaging/awdl-warmup.service" \
+    "${pkgdir}/usr/lib/systemd/system/awdl-warmup.service"
+  # Enabled by default, as a vendor wants link: `systemctl mask
+  # awdl-warmup.service` turns it off, and a package upgrade leaves that alone.
+  install -d "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants"
+  ln -s ../awdl-warmup.service \
+    "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants/awdl-warmup.service"
   # Vendor directories, not /etc: both are read after the package's own copy is
   # in place, and both leave an /etc override to the person running the machine.
   install -Dm644 "${srcdir}/omdrop-awdl-${pkgver}/packaging/brcmfmac-awdl.conf" \
