@@ -36,7 +36,7 @@ sudo modprobe brcmfmac
 
 The package also enables a boot-time warm-up, `awdl-warmup.service`, so the first AirDrop window after each boot opens in seconds. It takes effect from the next boot.
 
-Without it, the first window after a boot takes about a minute: the first AWDL session on a new `awdl0` doesn't transmit until AWDL has been switched off and on, and omdrop's transmit check spends that minute finding out. The warm-up creates `awdl0` and runs that check at boot, in the background, then leaves AWDL enabled. It advertises nothing: you aren't discoverable until a window opens.
+Without it, the first window after a boot takes about a minute: the first AWDL session on a new `awdl0` doesn't transmit until AWDL has been switched off and on, and omdrop's transmit check spends that minute finding out. The warm-up creates `awdl0` and runs that check at boot, in the background, then leaves AWDL enabled. Its probe frames carry no AirDrop records, so it announces no service and no host name: you aren't discoverable until a window opens.
 
 To turn it off:
 

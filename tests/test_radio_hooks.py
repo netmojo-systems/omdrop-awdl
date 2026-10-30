@@ -297,6 +297,24 @@ class UpTests(HookHarness):
         # The probe borrows awdl_trace and puts it back.
         self.assertEqual((self.stub / "awdl_trace").read_text(), "0")
         self.assertNotIn("set awdl ", self.log("iovar.log"))
+        # A window's probe is its AirDrop announcement.
+        self.assertEqual(self.log("awdl-airdrop-adv.py.log").split(),
+                         "--iface awdl0 --count 20 --interval 0.02 --seq 9000".split())
+
+    def test_the_boot_warmup_probes_without_announcing_anything(self):
+        # No window is open at boot, so the warm-up's gate must not announce an
+        # AirDrop service or this machine's name (review 1029, R1).
+        self.interface()
+        (self.stub / "dmesg").write_text(TRANSMITTING)
+        shutil.copy2(USERSPACE / "awdl-warmup", self.lib / "awdl-warmup")
+        env = dict(os.environ, STUB=str(self.stub), PATH=f"{self.bin}:{os.environ['PATH']}",
+                   OMDROP_CONF=str(self.root / "conf"), AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"))
+        result = subprocess.run([str(self.lib / "awdl-warmup")], capture_output=True, text=True,
+                                env=env, timeout=30, cwd="/")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("gate: probe 20 frames -> 20 completions", result.stderr)
+        self.assertEqual(self.log("awdl-airdrop-adv.py.log").split(),
+                         "--iface awdl0 --count 20 --interval 0.02 --seq 9000 --neutral".split())
 
     def test_a_failed_probe_exits_3(self):
         self.interface()

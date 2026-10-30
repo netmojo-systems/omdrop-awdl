@@ -385,8 +385,19 @@ cmd_start(){
   if ! flock -n 9; then
     # The boot-time warm-up holds the lock for its gate, and a window opened
     # right after login should wait for it, not fail: once it ends, this
-    # start's first probe passes.
-    if warmup_running; then
+    # start's first probe passes. It names itself in $RUN/warmup a moment
+    # after taking the lock and stops a moment before letting go, so look
+    # for that, or for the lock coming free, before calling the holder
+    # another start.
+    local i locked=
+    for (( i = 0; i < WARMUP_HANDOFF * 20; i++ )); do
+      warmup_running && break
+      sleep 0.05
+      flock -n 9 && { locked=1; break; }
+    done
+    if [[ -n $locked ]]; then
+      :
+    elif warmup_running; then
       log "waiting for the boot-time warm-up to finish"
       # 3, not 5: no window opened, and 5 reads as "already starting".
       flock -w "$WARMUP_WAIT" 9 || { log "the boot-time warm-up held the start lock for ${WARMUP_WAIT}s; try again"; exit 3; }

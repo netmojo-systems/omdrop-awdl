@@ -8,10 +8,10 @@
 # the gate's first probe. Turning awdl off again undoes that, so this leaves it
 # enabled, as stopping a window does.
 #
-# It advertises nothing: no template, identity or mDNS, only the gate's own
-# 20-frame probes. It holds the start lock and records its pid in $RUN/warmup,
-# so a window opened during boot waits for it instead of interleaving iovars
-# with it or failing.
+# It advertises nothing: no template or identity, and the gate's 20-frame
+# probes carry no mDNS records (PROBE_NEUTRAL). It holds the start lock and,
+# only while holding it, records its pid in $RUN/warmup, so a window opened
+# during boot waits for it instead of interleaving iovars with it or failing.
 #
 # Exit 0: transmitting, or a window already ran (a template is loaded).
 #      1: the gate never saw transmit; the next window runs it again.
@@ -30,7 +30,9 @@ need_run_dir
 exec 9>"$RUN/start.lock"
 flock -w "${AWDL_WARMUP_LOCK_WAIT:-120}" 9 || die 3 "warm-up: the start lock stayed held; skipping"
 # A start that finds the lock held waits for us instead of failing, while this
-# names a live awdl-warmup.
+# names a live awdl-warmup. Written only once the lock is ours: a warm-up still
+# queued behind an ordinary start must not make that start look like us. A
+# start allows for the moment before this and after the trap (WARMUP_HANDOFF).
 printf '%s\n' "$$" > "$RUN/warmup"
 trap 'rm -f "$RUN/warmup"' EXIT
 
@@ -49,6 +51,6 @@ if [[ ${plen:-0} -gt 0 ]]; then
   log "warm-up: a window already ran (awdl_payload len $plen); nothing to do"
   exit 0
 fi
-gate; rc=$?
+PROBE_NEUTRAL=1 gate; rc=$?
 log "warm-up: gate rc=$rc after $(( $(now) - t0 ))s; awdl left enabled"
 exit "$rc"
