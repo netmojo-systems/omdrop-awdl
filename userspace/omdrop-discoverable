@@ -383,8 +383,16 @@ cmd_start(){
   # two `start 600` processes, three consecutive 0-completion probes).
   exec 9>"$RUN/start.lock"
   if ! flock -n 9; then
-    log "another start is already in its gate; not racing it"
-    exit 5
+    # The boot-time warm-up holds the lock for its gate, and a window opened
+    # right after login should wait for it, not fail: once it ends, this
+    # start's first probe passes.
+    if warmup_running; then
+      log "waiting for the boot-time warm-up to finish"
+      flock -w "$WARMUP_WAIT" 9 || { log "the warm-up held the start lock for ${WARMUP_WAIT}s; not racing it"; exit 5; }
+    else
+      log "another start is already in its gate; not racing it"
+      exit 5
+    fi
   fi
 
   # A window omdrop-core's helper opened is not ours to extend or replace:

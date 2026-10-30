@@ -26,6 +26,8 @@ SUPERVISOR_UID=0
 # expected failure rate (~1 in 8) stops improving faster than the user's
 # patience degrades.
 ENABLES=${AWDL_GATE_ENABLES:-3}
+# How long a start waits for the boot-time warm-up's gate (awdl-warmup).
+WARMUP_WAIT=${AWDL_WARMUP_WAIT:-180}
 
 # stderr always; the file only when /run/awdl-discoverable exists and is ours
 # (status runs as the user, and a noisy tee failure is not a status result).
@@ -840,6 +842,21 @@ cmd_trace(){
 # hook_mode: every hook calls it right after sourcing this file. Core copies a
 # hook's stderr into $RUN/log with the timestamp kept, so a hook logs to stderr
 # only; appending to the file as well would log every line twice.
+# Whether the boot-time warm-up (awdl-warmup) holds the start lock: it records
+# its pid in $RUN/warmup while it runs.
+warmup_running(){
+  local pid
+  pid=$(cat "$RUN/warmup" 2>/dev/null) || return 1
+  [[ $pid =~ ^[0-9]+$ ]] || return 1
+  # comm is the interpreter's name for a `#!/usr/bin/env bash` script, so the
+  # command line is what says it is awdl-warmup. A reused pid fails this.
+  local arg
+  while IFS= read -r -d '' arg; do
+    [[ ${arg##*/} == awdl-warmup ]] && return 0
+  done 2>/dev/null < "/proc/$pid/cmdline"
+  return 1
+}
+
 hook_mode(){
   log(){ printf '%s\n' "$(date -u +%H:%M:%SZ) $*" >&2; }
   set_reason(){ :; }

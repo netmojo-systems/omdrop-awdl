@@ -3,6 +3,7 @@
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -101,6 +102,75 @@ class WarmupTests(unittest.TestCase):
         result = self.run_warmup()
         self.assertEqual(result.returncode, 3)
         self.assertNotIn("gate", self.calls())
+
+
+DISCOVERABLE = USERSPACE / "omdrop-discoverable"
+BROADCOM = USERSPACE / "omdrop-broadcom.sh"
+
+
+def function(source, name):
+    start = source.index(f"\n{name}(){{") + 1
+    return source[start:source.index("\n}\n", start) + 3]
+
+
+class StartWaitsForWarmupTests(unittest.TestCase):
+    """A window opened during the boot warm-up waits for it instead of failing."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.run = self.root / "run"
+        self.run.mkdir()
+        (self.run / "until").write_text("0")
+        source = DISCOVERABLE.read_text() + BROADCOM.read_text()
+        self.fragments = "\n".join(function(source, n) for n in
+                                   ("is_uint", "is_duration", "warmup_running", "cmd_start"))
+
+    def hold_lock(self, as_warmup, seconds="1.5"):
+        # A process named awdl-warmup holds the start lock, recorded in
+        # $RUN/warmup as the warm-up records itself, or an unrelated one does.
+        name = self.root / ("awdl-warmup" if as_warmup else "other-start")
+        name.write_text(f'#!/usr/bin/env bash\nexec 9>"{self.run}/start.lock"\nflock 9\n'
+                        f'echo $$ > "{self.run}/warmup"\nsleep {seconds}\n')
+        name.chmod(0o755)
+        holder = subprocess.Popen([str(name)])
+        self.addCleanup(holder.wait)
+        deadline = time.monotonic() + 5
+        while not (self.run / "warmup").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    def start(self):
+        script = f'''
+set -uo pipefail
+RUN={self.run}
+WARMUP_WAIT=10
+log(){{ printf '%s\\n' "$*" >&2; }}
+die(){{ local rc=$1; shift; log "$*"; exit "$rc"; }}
+need_root(){{ :; }}
+now(){{ date +%s; }}
+core_supervisor_pids(){{ :; }}
+supervisor_alive(){{ return 0; }}
+{self.fragments}
+cmd_start 600
+'''
+        began = time.monotonic()
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+        return result, time.monotonic() - began
+
+    def test_a_start_during_the_warmup_waits_for_it(self):
+        self.hold_lock(as_warmup=True)
+        result, took = self.start()
+        self.assertIn("waiting for the boot-time warm-up", result.stderr)
+        self.assertNotIn("not racing it", result.stderr)
+        self.assertGreaterEqual(took, 1.0)
+
+    def test_a_start_during_another_start_still_refuses_at_once(self):
+        self.hold_lock(as_warmup=False, seconds="5")
+        result, took = self.start()
+        self.assertEqual(result.returncode, 5)
+        self.assertIn("another start is already in its gate", result.stderr)
+        self.assertLess(took, 2.0)
 
 
 if __name__ == "__main__":

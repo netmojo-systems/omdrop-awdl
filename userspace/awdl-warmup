@@ -9,8 +9,9 @@
 # enabled, as stopping a window does.
 #
 # It advertises nothing: no template, identity or mDNS, only the gate's own
-# 20-frame probes. It holds the start lock, so a window opened during boot
-# waits for it instead of interleaving iovars with it.
+# 20-frame probes. It holds the start lock and records its pid in $RUN/warmup,
+# so a window opened during boot waits for it instead of interleaving iovars
+# with it or failing.
 #
 # Exit 0: transmitting, or a window already ran (a template is loaded).
 #      1: the gate never saw transmit; the next window runs it again.
@@ -28,6 +29,10 @@ need_run_dir
 
 exec 9>"$RUN/start.lock"
 flock -w "${AWDL_WARMUP_LOCK_WAIT:-120}" 9 || die 3 "warm-up: the start lock stayed held; skipping"
+# A start that finds the lock held waits for us instead of failing, while this
+# names a live awdl-warmup.
+printf '%s\n' "$$" > "$RUN/warmup"
+trap 'rm -f "$RUN/warmup"' EXIT
 
 t0=$(now)
 awdl0_ready || timeout --foreground 60 "$LIB/awdl-up" >/dev/null 2>&1

@@ -615,7 +615,8 @@ class ProcessGroupTests(HookHarness):
         executable(self.lib / "brcm_iovar.py", CREATE_SLOWLY)
         (self.stub / "driver").touch()
         env = dict(os.environ, STUB=str(self.stub), PATH=f"{self.bin}:{os.environ['PATH']}",
-                   OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub")
+                   OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub",
+                   AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"))
         hook = subprocess.Popen([str(self.lib / "radio" / "up")], stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, env=env, cwd="/", start_new_session=True)
         self.addCleanup(hook.wait)
@@ -709,7 +710,8 @@ class ReloadTests(unittest.TestCase):
 
     def reload(self):
         env = dict(os.environ, STUB=str(self.stub), PATH=f"{self.bin}:{os.environ['PATH']}",
-                   OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub", AWDL_WAIT_STA="0")
+                   OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub", AWDL_WAIT_STA="0",
+                   AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"))
         return subprocess.run([str(self.awdl_up), "--reload"], capture_output=True, text=True,
                               env=env, timeout=10, cwd="/")
 
@@ -719,6 +721,19 @@ class ReloadTests(unittest.TestCase):
         self.assertIn("brcmfmac reloaded", result.stdout)
         self.assertTrue((self.sys / "brcmfmac").is_dir())
         self.assertFalse((self.sys / "brcmutil" / "stock").exists())
+
+    def test_a_second_awdl_up_waits_for_the_first(self):
+        # awdl0.service and awdl-warmup.service both run awdl-up at boot.
+        lock = self.stub / "awdl-up.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        holder = subprocess.Popen(["flock", str(lock), "sleep", "1.5"])
+        self.addCleanup(holder.wait)
+        while not subprocess.run(["flock", "-n", str(lock), "true"]).returncode:
+            time.sleep(0.05)
+        started = time.monotonic()
+        result = self.reload()
+        self.assertGreaterEqual(time.monotonic() - started, 1.0, result.stdout + result.stderr)
+        self.assertIn("brcmfmac reloaded", result.stdout)
 
     def test_a_second_brcmutil_user_stops_the_reload_before_the_unload(self):
         (self.sys / "brcmutil" / "holders" / "brcmsmac").touch()

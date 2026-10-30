@@ -44,7 +44,7 @@ To turn it off:
 sudo systemctl mask awdl-warmup.service
 ```
 
-To create `awdl0` at boot without the warm-up, mask it as above and run `sudo systemctl enable awdl0.service`.
+To create `awdl0` at boot without the warm-up, mask it as above and run `sudo systemctl enable awdl0.service`. If you enabled `awdl0.service` before the warm-up existed, you can leave it enabled: the two don't interfere.
 
 If a kernel update breaks the DKMS build, the stock `brcmfmac` loads instead: DKMS sets the kernel's own driver aside only when its build installs, and puts it back when the package is removed. You lose AWDL, not the network.
 
