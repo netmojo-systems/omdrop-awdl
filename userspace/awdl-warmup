@@ -36,6 +36,11 @@ trap 'rm -f "$RUN/warmup"' EXIT
 
 t0=$(now)
 awdl0_ready || timeout --foreground 60 "$LIB/awdl-up" >/dev/null 2>&1
+# awdl0.service may still be inside its own awdl-up, writing the schedule into
+# an awdl0 that already exists; wait for it, and keep it out until the gate is
+# done. awdl-up takes this lock itself, so it is taken only after our call.
+exec 7>"${AWDL_UP_LOCK:-/run/awdl-up.lock}"
+flock -w 180 7 || die 3 "warm-up: awdl-up held its lock for 180 s; skipping"
 awdl0_ready || die 4 "warm-up: no awdl0"
 # A loaded template means a window already ran: awdl is warm, and the gate
 # must not retoggle awdl with one loaded (023513Z).

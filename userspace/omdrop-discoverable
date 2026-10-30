@@ -388,7 +388,8 @@ cmd_start(){
     # start's first probe passes.
     if warmup_running; then
       log "waiting for the boot-time warm-up to finish"
-      flock -w "$WARMUP_WAIT" 9 || { log "the warm-up held the start lock for ${WARMUP_WAIT}s; not racing it"; exit 5; }
+      # 3, not 5: no window opened, and 5 reads as "already starting".
+      flock -w "$WARMUP_WAIT" 9 || { log "the boot-time warm-up held the start lock for ${WARMUP_WAIT}s; try again"; exit 3; }
     else
       log "another start is already in its gate; not racing it"
       exit 5

@@ -50,7 +50,8 @@ class WarmupTests(unittest.TestCase):
             path.chmod(0o755)
 
     def run_warmup(self, **env):
-        full = dict(os.environ, STUB=str(self.stub), AWDL_WARMUP_LOCK_WAIT="1", **env)
+        full = dict(os.environ, STUB=str(self.stub), AWDL_WARMUP_LOCK_WAIT="1",
+                    AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"), **env)
         return subprocess.run([str(self.lib / "awdl-warmup")], capture_output=True,
                               text=True, env=full, timeout=20, cwd="/")
 
@@ -79,6 +80,21 @@ class WarmupTests(unittest.TestCase):
         result = self.run_warmup(STUB_PLEN="512")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("gate", self.calls())
+
+    def test_the_gate_waits_for_an_awdl_up_still_configuring_awdl0(self):
+        # awdl0.service's awdl-up may have created awdl0 and still be writing
+        # the schedule when the warm-up starts.
+        (self.stub / "awdl0").touch()
+        lock = self.stub / "awdl-up.lock"
+        holder = subprocess.Popen(["flock", str(lock), "sh", "-c",
+                                   f"sleep 1; echo awdl0.service-done >> {self.stub}/calls"])
+        self.addCleanup(holder.wait)
+        while not subprocess.run(["flock", "-n", str(lock), "true"]).returncode:
+            time.sleep(0.05)
+        result = self.run_warmup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        self.assertLess(calls.index("awdl0.service-done"), calls.index("gate"))
 
     def test_no_awdl0_exits_4_without_the_gate(self):
         result = self.run_warmup(STUB_NO_AWDL0="1")
