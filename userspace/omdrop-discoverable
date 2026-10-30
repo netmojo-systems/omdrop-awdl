@@ -389,15 +389,17 @@ cmd_start(){
     # after taking the lock and stops a moment before letting go, so look
     # for that, or for the lock coming free, before calling the holder
     # another start.
-    local i locked=
+    # The answer is kept, not asked again: the warm-up may stop naming
+    # itself right after it is seen, and the lock wait covers that.
+    local i holder=other
     for (( i = 0; i < WARMUP_HANDOFF * 20; i++ )); do
-      warmup_running && break
+      warmup_running && { holder=warmup; break; }
       sleep 0.05
-      flock -n 9 && { locked=1; break; }
+      flock -n 9 && { holder=free; break; }
     done
-    if [[ -n $locked ]]; then
+    if [[ $holder == free ]]; then
       :
-    elif warmup_running; then
+    elif [[ $holder == warmup ]]; then
       log "waiting for the boot-time warm-up to finish"
       # 3, not 5: no window opened, and 5 reads as "already starting".
       flock -w "$WARMUP_WAIT" 9 || { log "the boot-time warm-up held the start lock for ${WARMUP_WAIT}s; try again"; exit 3; }
