@@ -89,7 +89,9 @@ class WarmupTests(unittest.TestCase):
         holder = subprocess.Popen(["flock", str(lock), "sh", "-c",
                                    f"sleep 1; echo awdl0.service-done >> {self.stub}/calls"])
         self.addCleanup(holder.wait)
+        deadline = time.monotonic() + 5
         while not subprocess.run(["flock", "-n", str(lock), "true"]).returncode:
+            self.assertLess(time.monotonic(), deadline, "the holder never took the lock")
             time.sleep(0.05)
         result = self.run_warmup()
         self.assertEqual(result.returncode, 0, result.stderr)

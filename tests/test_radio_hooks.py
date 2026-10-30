@@ -728,7 +728,9 @@ class ReloadTests(unittest.TestCase):
         lock.parent.mkdir(parents=True, exist_ok=True)
         holder = subprocess.Popen(["flock", str(lock), "sleep", "1.5"])
         self.addCleanup(holder.wait)
+        deadline = time.monotonic() + 5
         while not subprocess.run(["flock", "-n", str(lock), "true"]).returncode:
+            self.assertLess(time.monotonic(), deadline, "the holder never took the lock")
             time.sleep(0.05)
         started = time.monotonic()
         result = self.reload()
