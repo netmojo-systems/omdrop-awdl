@@ -9,9 +9,10 @@
 # enabled, as stopping a window does.
 #
 # It advertises nothing: no template or identity, and the gate's 20-frame
-# probes carry no mDNS records (PROBE_NEUTRAL). It holds the start lock and,
-# only while holding it, records its pid in $RUN/warmup, so a window opened
-# during boot waits for it instead of interleaving iovars with it or failing.
+# probes carry no mDNS records (PROBE_NEUTRAL). It holds the start lock, and
+# warmup.lock for as long as it might: a window opened during boot finds that
+# lock held and waits for the warm-up instead of interleaving iovars with it or
+# failing.
 #
 # Exit 0: transmitting, or a window already ran (a template is loaded).
 #      1: the gate never saw transmit; the next window runs it again.
@@ -27,14 +28,17 @@ hook_mode
 need_root
 need_run_dir
 
-exec 9>"$RUN/start.lock"
-flock -w "${AWDL_WARMUP_LOCK_WAIT:-120}" 9 || die 3 "warm-up: the start lock stayed held; skipping"
-# A start that finds the lock held waits for us instead of failing, while this
-# names a live awdl-warmup. Written only once the lock is ours: a warm-up still
-# queued behind an ordinary start must not make that start look like us. A
-# start allows for the moment before this and after the trap (WARMUP_HANDOFF).
-printf '%s\n' "$$" > "$RUN/warmup"
-trap 'rm -f "$RUN/warmup"' EXIT
+# warmup.lock is how a start tells us from another start: it is held whenever
+# the start lock is ours, so a start that finds the start lock held and this
+# one held too waits instead of failing. Taken first and let go of last; a
+# start only takes it shared, for an instant, to look. On exit the start lock
+# is let go of first: the trap does it, and on a kill the kernel closes the
+# lower descriptor first.
+exec 9>"$RUN/warmup.lock"
+flock -w 10 9 || die 3 "warm-up: another warm-up is running"
+exec 8>"$RUN/start.lock"
+flock -w "${AWDL_WARMUP_LOCK_WAIT:-120}" 8 || die 3 "warm-up: the start lock stayed held; skipping"
+trap 'flock -u 8; flock -u 9' EXIT
 
 t0=$(now)
 awdl0_ready || timeout --foreground 60 "$LIB/awdl-up" >/dev/null 2>&1

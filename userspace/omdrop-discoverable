@@ -385,29 +385,20 @@ cmd_start(){
   if ! flock -n 9; then
     # The boot-time warm-up holds the lock for its gate, and a window opened
     # right after login should wait for it, not fail: once it ends, this
-    # start's first probe passes. It names itself in $RUN/warmup a moment
-    # after taking the lock and stops a moment before letting go, so look
-    # for that, or for the lock coming free, before calling the holder
-    # another start.
-    # The answer is kept, not asked again: the warm-up may stop naming
-    # itself right after it is seen, and the lock wait covers that.
-    local i holder=other
-    for (( i = 0; i < WARMUP_HANDOFF * 20; i++ )); do
-      warmup_running && { holder=warmup; break; }
-      sleep 0.05
-      flock -n 9 && { holder=free; break; }
-    done
-    if [[ $holder == free ]]; then
-      :
-    elif [[ $holder == warmup ]]; then
+    # start's first probe passes. It holds warmup.lock whenever it holds this
+    # one, and lets go of this one first, so a holder seen with warmup.lock
+    # free is another start, unless the warm-up let go of both between the
+    # two looks: the lock is tried once more for that.
+    if warmup_running; then
       log "waiting for the boot-time warm-up to finish"
       # 3, not 5: no window opened, and 5 reads as "already starting".
       flock -w "$WARMUP_WAIT" 9 || { log "the boot-time warm-up held the start lock for ${WARMUP_WAIT}s; try again"; exit 3; }
-    else
+    elif ! flock -n 9; then
       log "another start is already in its gate; not racing it"
       exit 5
     fi
   fi
+
 
   # A window omdrop-core's helper opened is not ours to extend or replace:
   # carrying on would kill its children, toggle awdl=0/1 under its supervisor

@@ -28,11 +28,6 @@ SUPERVISOR_UID=0
 ENABLES=${AWDL_GATE_ENABLES:-3}
 # How long a start waits for the boot-time warm-up's gate (awdl-warmup).
 WARMUP_WAIT=${AWDL_WARMUP_WAIT:-180}
-# How long a start that finds the start lock held looks for the warm-up before
-# taking the holder for another start. The warm-up writes $RUN/warmup just
-# after it takes the lock and removes it just before it lets go, so one look
-# can miss it.
-WARMUP_HANDOFF=2
 
 # stderr always; the file only when /run/awdl-discoverable exists and is ours
 # (status runs as the user, and a noisy tee failure is not a status result).
@@ -852,21 +847,16 @@ cmd_trace(){
 # hook_mode: every hook calls it right after sourcing this file. Core copies a
 # hook's stderr into $RUN/log with the timestamp kept, so a hook logs to stderr
 # only; appending to the file as well would log every line twice.
-# Whether the boot-time warm-up (awdl-warmup) holds the start lock: it records
-# its pid in $RUN/warmup only while it holds it. A warm-up still queued for the
-# lock does not name itself, so a start that finds an ordinary start holding
-# the lock never waits for that one.
+# Whether the boot-time warm-up (awdl-warmup) is running: it holds warmup.lock
+# for as long as it holds the start lock, and a little longer. Looked at with a
+# shared lock taken and dropped at once, which the warm-up's own wait for it
+# allows. 75 is flock's answer for "held"; any other failure is not the
+# warm-up.
 warmup_running(){
-  local pid
-  pid=$(cat "$RUN/warmup" 2>/dev/null) || return 1
-  [[ $pid =~ ^[0-9]+$ ]] || return 1
-  # comm is the interpreter's name for a `#!/usr/bin/env bash` script, so the
-  # command line is what says it is awdl-warmup. A reused pid fails this.
-  local arg
-  while IFS= read -r -d '' arg; do
-    [[ ${arg##*/} == awdl-warmup ]] && return 0
-  done 2>/dev/null < "/proc/$pid/cmdline"
-  return 1
+  [[ -e $RUN/warmup.lock ]] || return 1
+  local rc=0
+  flock -s -n -E 75 "$RUN/warmup.lock" true 2>/dev/null || rc=$?
+  (( rc == 75 ))
 }
 
 hook_mode(){
