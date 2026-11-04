@@ -228,6 +228,14 @@ RELOAD=0
 exec 8>"${AWDL_UP_LOCK:-/run/awdl-up.lock}"
 flock -w 180 8 || { log "another awdl-up held its lock for 180 s; giving up"; exit 6; }
 
+# The sleep hook (/usr/lib/systemd/system-sleep/omdrop-awdl) writes $SLEEPING
+# before suspend or hibernate and removes it on resume. While it is there, no
+# awdl0 is created or brought up: one that survived a suspend has left the
+# Wi-Fi interface unable to associate until a reboot (#67).
+SLEEPING=${AWDL_SLEEP_MARKER:-/run/awdl-up.sleeping}
+CREATE_LOCK=${AWDL_CREATE_LOCK:-/run/awdl-up.create.lock}
+if [[ -e $SLEEPING ]]; then log "the system is going to sleep; leaving $IF alone"; exit 7; fi
+
 # NM must not manage awdl0: a managed awdl0 gets a randomised MAC and no
 # link-local, which voids every address the peers target. The package ships the
 # vendor copy; this only writes /etc when neither file is present, so a removed
@@ -295,9 +303,19 @@ if ! wait_permaddr; then
 fi
 
 log "creating $IF from $STA"
+# The create lock covers the create request and the wait for its interface.
+# The sleep hook writes $SLEEPING first and then takes this lock, so a create
+# either lands before the hook looks for awdl0, and is removed with it, or
+# sees the marker and never starts. The firmware reports a create within
+# 1.5 s (BRCMF_VIF_EVENT_TIMEOUT), inside the 2 s wait. The descriptor is
+# inherited by the create's children, so the hook's fallback finds them too.
+exec 6>"$CREATE_LOCK"
+flock -w 30 6 || { log "the sleep hook held $CREATE_LOCK for 30 s; not creating $IF"; exit 7; }
+if [[ -e $SLEEPING ]]; then log "the system is going to sleep; not creating $IF"; exit 7; fi
 timeout --foreground 20 python3 "$LIB/brcm_iovar.py" -i "$STA" awdl-if create 2>&1 | sed 's/^/  /'
 sleep 2
 ip link show "$IF" >/dev/null 2>&1 || { log "awdl-if create did not produce $IF"; exit 4; }
+exec 6>&-
 ip link set "$IF" up
 
 apply_schedule

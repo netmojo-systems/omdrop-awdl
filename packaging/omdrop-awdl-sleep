@@ -1,25 +1,67 @@
 #!/usr/bin/env bash
 # systemd-sleep hook: end any AirDrop window and remove awdl0 before the
-# machine sleeps (#67).
+# machine sleeps, and create no awdl0 until it has resumed (#67).
 #
 # On a BCM4387 one s2idle resume in twenty left wlan0 unable to associate
 # until a reboot, and it was the only one of the twenty with awdl0 present.
 # The reporter's workaround has held since: stop the window, then take awdl0
-# down and delete it before suspend. This hook does the same. A window would
-# not survive the sleep anyway, because peers time it out while the machine
-# is suspended.
+# down and delete it before suspend. This hook does the same, and also stops
+# a create that is starting up or in flight from bringing awdl0 back. That
+# can be the boot-time warm-up, awdl0.service, or a window's start.
+#
+# Every awdl0 is created by awdl-up, under its create lock, and awdl-up
+# refuses to create one while $SLEEPING exists. So the order before sleep is:
+# write the marker, wait for any create in flight to finish, end the window,
+# then remove whatever awdl0 is left. On resume the marker goes, and the next
+# window creates awdl0 again.
 #
 # It runs as root from systemd-sleep, so it doesn't use polkit, and its
 # output goes to the journal under systemd-sleep. A failure here must not
 # hold up suspend, so every step is best-effort and the hook always exits 0.
-# After resume, awdl0 is created again by the next window that needs it.
 set -u
-
-[[ ${1:-} == pre ]] || exit 0
 
 LIB=/usr/lib/omdrop
 IF=awdl0
+SLEEPING=${AWDL_SLEEP_MARKER:-/run/awdl-up.sleeping}
+CREATE_LOCK=${AWDL_CREATE_LOCK:-/run/awdl-up.create.lock}
+# awdl-up holds the create lock for at most its 20 s create timeout and 2 s.
+CREATE_WAIT=${AWDL_SLEEP_CREATE_WAIT:-25}
 log(){ printf 'omdrop-awdl sleep: %s\n' "$*" >&2; }
+
+case ${1:-} in
+  pre) ;;
+  post) rm -f "$SLEEPING"; exit 0 ;;
+  *) exit 0 ;;
+esac
+
+: > "$SLEEPING" || log "could not write $SLEEPING; a create may still bring $IF back"
+
+# Every process with the create lock open: awdl-up and the children that
+# inherited its descriptor. Called with descriptor 9 closed, so that the
+# subshells running it don't count, and this shell, which holds the lock too,
+# is left out by pid.
+lock_holders(){
+  local fd pid
+  for fd in /proc/[0-9]*/fd/*; do
+    [[ $(readlink "$fd" 2>/dev/null) == "$CREATE_LOCK" ]] || continue
+    pid=${fd#/proc/}; pid=${pid%%/*}
+    [[ $pid == "$$" ]] || printf '%s\n' "$pid"
+  done | sort -u
+}
+
+# Held until exit, so no create can start between here and the destroy.
+if exec 9>"$CREATE_LOCK"; then
+  if ! flock -w "$CREATE_WAIT" 9; then
+    mapfile -t holders < <(lock_holders 9>&-)
+    log "a create held its lock for ${CREATE_WAIT}s; killing ${holders[*]:-nothing}"
+    (( ${#holders[@]} )) && kill -KILL "${holders[@]}" 2>/dev/null
+    flock -w 5 9 || log "the create lock is still held"
+    # A create the firmware already accepted reports within 1.5 s.
+    sleep 2
+  fi
+else
+  log "could not open $CREATE_LOCK"
+fi
 
 # Ends this package's window and omdrop-core's: stop signals both supervisors.
 if [[ -x $LIB/omdrop-discoverable ]]; then
