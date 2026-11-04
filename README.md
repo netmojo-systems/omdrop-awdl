@@ -46,6 +46,8 @@ sudo systemctl mask awdl-warmup.service
 
 To create `awdl0` at boot without the warm-up, mask it as above and run `sudo systemctl enable awdl0.service`. If you enabled `awdl0.service` before the warm-up existed, you can leave it enabled: the two don't interfere.
 
+Before the machine suspends or hibernates, a sleep hook ends any open window and removes `awdl0`. On one MacBook Air M2, the only s2idle resume in twenty that left Wi-Fi unable to associate until a reboot was the one with `awdl0` present ([#67](https://github.com/netmojo-systems/omdrop-awdl/issues/67)). Nothing recreates `awdl0` on resume, so the first window after a resume takes about a minute, like the first window after a boot without the warm-up.
+
 If a kernel update breaks the DKMS build, the stock `brcmfmac` loads instead: DKMS sets the kernel's own driver aside only when its build installs, and puts it back when the package is removed. You lose AWDL, not the network.
 
 On a kernel whose own `brcmfmac` already has this AWDL support, DKMS skips the build and that kernel's driver stays in use. The check looks for either of two module parameters: `awdl_create_flags`, which 0004 adds, or `awdl`, the on/off switch that replaced it upstream. With `awdl=0`, `omdrop doctor` says AirDrop is turned off in the driver.
@@ -71,6 +73,7 @@ On a kernel whose own `brcmfmac` already has this AWDL support, DKMS skips the b
 | `/usr/lib/omdrop/awdl-warmup` | Creates `awdl0` and proves it transmits once; run at boot by `awdl-warmup.service` |
 | `/usr/lib/systemd/system/awdl-warmup.service` | Boot-time `awdl0` setup and warm-up; enabled by the install |
 | `/usr/lib/systemd/system/awdl0.service` | Boot-time `awdl0` setup without the warm-up; not enabled by the install |
+| `/usr/lib/systemd/system-sleep/omdrop-awdl` | Before suspend or hibernate, ends any window and removes `awdl0` |
 | `/usr/lib/modprobe.d/brcmfmac-awdl.conf` | `debug=0x1000`, the firmware-interface bit of the debug mask; the data-path check doesn't depend on it |
 | `/usr/lib/NetworkManager/conf.d/99-awdl-unmanaged.conf` | Keeps NetworkManager off `awdl0` |
 | `/usr/share/doc/brcmfmac-awdl-dkms/` | This README, and an optional `10-wld0.link` the package doesn't activate |

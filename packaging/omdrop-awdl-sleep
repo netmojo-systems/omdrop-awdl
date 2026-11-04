@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# systemd-sleep hook: end any AirDrop window and remove awdl0 before the
+# machine sleeps (#67).
+#
+# On a BCM4387 one s2idle resume in twenty left wlan0 unable to associate
+# until a reboot, and it was the only one of the twenty with awdl0 present.
+# The reporter's workaround has held since: stop the window, then take awdl0
+# down and delete it before suspend. This hook does the same. A window would
+# not survive the sleep anyway, because peers time it out while the machine
+# is suspended.
+#
+# It runs as root from systemd-sleep, so it doesn't use polkit, and its
+# output goes to the journal under systemd-sleep. A failure here must not
+# hold up suspend, so every step is best-effort and the hook always exits 0.
+# After resume, awdl0 is created again by the next window that needs it.
+set -u
+
+[[ ${1:-} == pre ]] || exit 0
+
+LIB=/usr/lib/omdrop
+IF=awdl0
+log(){ printf 'omdrop-awdl sleep: %s\n' "$*" >&2; }
+
+# Ends this package's window and omdrop-core's: stop signals both supervisors.
+if [[ -x $LIB/omdrop-discoverable ]]; then
+  "$LIB/omdrop-discoverable" stop || log "omdrop-discoverable stop exited $?"
+fi
+
+ip link show "$IF" >/dev/null 2>&1 || exit 0
+# Down first, as in the workaround: the netdev's stop path deletes its
+# flowrings before the firmware is asked to drop the interface.
+ip link set "$IF" down 2>/dev/null || log "could not take $IF down"
+if ! out=$(timeout 8 python3 "$LIB/brcm_iovar.py" -i "$IF" awdl-if destroy 2>&1); then
+  log "destroying $IF failed: ${out##*$'\n'}"
+  exit 0
+fi
+# The vendor command only asks the firmware; the interface goes when its
+# IF_DEL event is handled.
+for _ in {1..20}; do
+  ip link show "$IF" >/dev/null 2>&1 || { log "removed $IF"; exit 0; }
+  sleep 0.1
+done
+log "$IF still present 2 s after the destroy request"
+exit 0
