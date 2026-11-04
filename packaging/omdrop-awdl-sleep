@@ -52,11 +52,16 @@ lock_holders(){
 # Held until exit, so no create can start between here and the destroy.
 if exec 9>"$CREATE_LOCK"; then
   if ! flock -w "$CREATE_WAIT" 9; then
-    mapfile -t holders < <(lock_holders 9>&-)
-    log "a create held its lock for ${CREATE_WAIT}s; killing ${holders[*]:-nothing}"
-    (( ${#holders[@]} )) && kill -KILL "${holders[@]}" 2>/dev/null
-    flock -w 5 9 || log "the create lock is still held"
-    # A create the firmware already accepted reports within 1.5 s.
+    # Scan and kill until the lock is free: a holder can fork a child that
+    # inherits the descriptor between one scan and its kill.
+    for _ in 1 2 3 4 5; do
+      mapfile -t holders < <(lock_holders 9>&-)
+      log "a create held its lock for ${CREATE_WAIT}s; killing ${holders[*]:-nothing}"
+      (( ${#holders[@]} )) && kill -KILL "${holders[@]}" 2>/dev/null
+      flock -w 1 9 && break
+    done || log "the create lock is still held"
+    # A create the firmware had already accepted registers awdl0 from the
+    # driver's event worker, usually within 2 s.
     sleep 2
   fi
 else

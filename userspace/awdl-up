@@ -306,14 +306,22 @@ log "creating $IF from $STA"
 # The create lock covers the create request and the wait for its interface.
 # The sleep hook writes $SLEEPING first and then takes this lock, so a create
 # either lands before the hook looks for awdl0, and is removed with it, or
-# sees the marker and never starts. The firmware reports a create within
-# 1.5 s (BRCMF_VIF_EVENT_TIMEOUT), inside the 2 s wait. The descriptor is
-# inherited by the create's children, so the hook's fallback finds them too.
+# sees the marker and never starts. The descriptor is inherited by the
+# create's children, so the hook's fallback finds them too.
+#
+# The driver registers awdl0 from its firmware-event worker once IF_ADD
+# arrives; BRCMF_VIF_EVENT_TIMEOUT (1.5 s) only abandons a create that got no
+# IF_ADD. Registration usually follows within 2 s but can lag behind a busy
+# worker, so wait up to 10 s for it, under the lock. A registration delayed
+# past that is not covered here; only the driver can rule it out.
 exec 6>"$CREATE_LOCK"
 flock -w 30 6 || { log "the sleep hook held $CREATE_LOCK for 30 s; not creating $IF"; exit 7; }
 if [[ -e $SLEEPING ]]; then log "the system is going to sleep; not creating $IF"; exit 7; fi
 timeout --foreground 20 python3 "$LIB/brcm_iovar.py" -i "$STA" awdl-if create 2>&1 | sed 's/^/  /'
-sleep 2
+for _ in $(seq 1 "${AWDL_CREATE_SETTLE:-50}"); do
+  ip link show "$IF" >/dev/null 2>&1 && break
+  sleep 0.2
+done
 ip link show "$IF" >/dev/null 2>&1 || { log "awdl-if create did not produce $IF"; exit 4; }
 exec 6>&-
 ip link set "$IF" up

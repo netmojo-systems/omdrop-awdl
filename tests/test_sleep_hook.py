@@ -12,6 +12,7 @@ nmcli and systemctl first on PATH. The stubs append to one log, so the order
 of the calls can be checked. Nothing here runs as root or touches a radio:
 awdl-up, which refuses to run without root, runs in a user namespace.
 """
+import fcntl
 import os
 import shutil
 import signal
@@ -62,11 +63,20 @@ elif sys.argv[-1] == "destroy":
 
 # A create in flight: takes the create lock, says so, and after HOLD seconds
 # creates awdl0 and lets go -- or holds it until killed when HOLD is "forever".
+# "forking" also keeps forking children that inherit the lock, as awdl-up
+# does for each command it runs, so a holder can appear between a scan and
+# its kill.
 CREATOR = r'''import fcntl, os, sys, time
 stub, lock, hold = os.environ["STUB"], sys.argv[1], sys.argv[2]
 fd = os.open(lock, os.O_WRONLY | os.O_CREAT, 0o644)
 fcntl.flock(fd, fcntl.LOCK_EX)
 open(os.path.join(stub, "creator.locked"), "w").close()
+if hold == "forking":
+    while True:
+        if os.fork() == 0:
+            while True:
+                time.sleep(60)
+        time.sleep(0.005)
 if hold == "forever":
     while True:
         time.sleep(60)
@@ -125,13 +135,31 @@ class Harness(unittest.TestCase):
 
     def creator(self, hold):
         proc = subprocess.Popen([sys.executable, "-c", CREATOR, str(self.lock), hold],
-                                env=self.env)
-        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+                                env=self.env, start_new_session=True)
+        self.addCleanup(self.kill_group, proc)
         deadline = time.monotonic() + 10
         while not (self.stub / "creator.locked").exists():
             self.assertLess(time.monotonic(), deadline, "the creator never took the lock")
             time.sleep(0.01)
         return proc
+
+    @staticmethod
+    def kill_group(proc):
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait(timeout=10)
+
+    def lock_is_free(self):
+        fd = os.open(self.lock, os.O_WRONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            return False
+        finally:
+            os.close(fd)
 
 
 class SleepHookTests(Harness):
@@ -178,6 +206,14 @@ class SleepHookTests(Harness):
         self.assertEqual(creator.wait(timeout=10), -signal.SIGKILL)
         self.assertIn(f"killing {creator.pid}", result.stderr)
         self.assertEqual(self.calls()[0], "omdrop-discoverable stop")
+
+    def test_children_forked_between_scan_and_kill_are_killed_too(self):
+        creator = self.creator("forking")
+        result = self.run_hook("pre", "suspend", AWDL_SLEEP_CREATE_WAIT="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("still held", result.stderr)
+        self.assertEqual(creator.wait(timeout=10), -signal.SIGKILL)
+        self.assertTrue(self.lock_is_free(), "a forked holder survived the hook")
 
     def test_failures_are_logged_and_never_block_sleep(self):
         (self.stub / "awdl0").touch()
