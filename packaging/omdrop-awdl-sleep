@@ -12,8 +12,9 @@
 # Every awdl0 is created by awdl-up, under its create lock, and awdl-up
 # refuses to create one while $SLEEPING exists. So the order before sleep is:
 # write the marker, wait for any create in flight to finish, end the window,
-# then remove whatever awdl0 is left. On resume the marker goes, and the next
-# window creates awdl0 again.
+# then remove whatever awdl0 is left, reloading the driver when the firmware
+# refuses to remove it. On resume the marker goes, and the next window
+# creates awdl0 again.
 #
 # It runs as root from systemd-sleep, so it doesn't use polkit, and its
 # output goes to the journal under systemd-sleep. A failure here must not
@@ -26,6 +27,7 @@ SLEEPING=${AWDL_SLEEP_MARKER:-/run/awdl-up.sleeping}
 CREATE_LOCK=${AWDL_CREATE_LOCK:-/run/awdl-up.create.lock}
 # awdl-up holds the create lock for at most its 20 s create timeout and 2 s.
 CREATE_WAIT=${AWDL_SLEEP_CREATE_WAIT:-25}
+SYSMOD=${AWDL_SYSMOD:-/sys/module}
 log(){ printf 'omdrop-awdl sleep: %s\n' "$*" >&2; }
 
 case ${1:-} in
@@ -77,15 +79,34 @@ ip link show "$IF" >/dev/null 2>&1 || exit 0
 # Down first, as in the workaround: the netdev's stop path deletes its
 # flowrings before the firmware is asked to drop the interface.
 ip link set "$IF" down 2>/dev/null || log "could not take $IF down"
-if ! out=$(timeout 8 python3 "$LIB/brcm_iovar.py" -i "$IF" awdl-if destroy 2>&1); then
+if out=$(timeout 8 python3 "$LIB/brcm_iovar.py" -i "$IF" awdl-if destroy 2>&1); then
+  # The vendor command only asks the firmware; the interface goes when its
+  # IF_DEL event is handled.
+  for _ in {1..20}; do
+    ip link show "$IF" >/dev/null 2>&1 || { log "removed $IF"; exit 0; }
+    sleep 0.1
+  done
+  log "$IF still present 2 s after the destroy request"
+else
   log "destroying $IF failed: ${out##*$'\n'}"
-  exit 0
 fi
-# The vendor command only asks the firmware; the interface goes when its
-# IF_DEL event is handled.
-for _ in {1..20}; do
-  ip link show "$IF" >/dev/null 2>&1 || { log "removed $IF"; exit 0; }
-  sleep 0.1
+
+# Once a window has run, BCM4387 firmware refuses interface_remove (BCME
+# error, -EBADE) from both the vendor destroy and `iw dev awdl0 del`: AWDL is
+# still enabled with the AirDrop template loaded, and turning AWDL off with a
+# template loaded has hung the firmware (023513Z). Reloading the driver is
+# the one way left to remove awdl0. The Wi-Fi link goes with it, which costs
+# nothing here: the machine is about to sleep, and wlan0 reassociates on
+# resume. The marker keeps awdl0 from being created again on the way back.
+log "reloading brcmfmac to remove $IF"
+for mod in brcmfmac_wcc brcmfmac brcmutil; do
+  [[ -d $SYSMOD/$mod ]] || continue
+  timeout 30 modprobe -r "$mod" || log "modprobe -r $mod failed"
 done
-log "$IF still present 2 s after the destroy request"
+timeout 30 modprobe brcmfmac || log "modprobe brcmfmac failed: no Wi-Fi until it is loaded"
+if ip link show "$IF" >/dev/null 2>&1; then
+  log "$IF is still present after the reload"
+else
+  log "removed $IF by reloading brcmfmac"
+fi
 exit 0
