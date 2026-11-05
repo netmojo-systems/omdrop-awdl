@@ -222,6 +222,9 @@ An open window costs 71 mW (95% CI 59.8–82.5), measured on an M1 Pro over 5.6 
 | 0014 | Gate the action-frame log behind `awdl_trace` too |
 | 0015 | Build against 7.1 headers as well as 7.2 (`remain_on_channel`'s `rx_addr`) |
 | 0016 | Report port authorization only after the connect result (an ordering error in `asahi-7.2.12-2`) |
+| 0017 | Quiesce the PCIe IRQ thread before a reset detaches the driver ([#60](https://github.com/netmojo-systems/omdrop-awdl/issues/60)) |
+| 0018 | Keep firmware-event state until P2P interface creation is done with it ([#59](https://github.com/netmojo-systems/omdrop-awdl/issues/59)) |
+| 0019 | Close `awdl0` and P2P netdevs before detach unregisters them under the wiphy lock |
 
 0001–0008 are the `brcm80211` commits [aurora-silicon/linux](https://github.com/aurora-silicon/linux) `aurora-wip` carries, with the same patch IDs: our series from [#24](https://github.com/aurora-silicon/linux/pull/24), then the maintainers' follow-up from [#183](https://github.com/aurora-silicon/linux/pull/183). On Asahi's `asahi-7.1.13-3`, applying only 0001–0008 gave a tree that differed from `aurora-wip` at `bc1823a` by one port-authorization fix in `cfg80211.c`. The tree vendored now is `asahi-7.2.12-2`. 0008 is rebased onto its reworked `brcmf_detach()`, so its patch ID no longer matches `aurora-wip`'s, though its effect is unchanged. 0015 lets that tree build against 7.1 headers as well as 7.2. 0009 restores the tx-completion log that #183 compiled out of release builds, which `omdrop-discoverable` counts to tell a transmitting radio from a parked one; it is proposed upstream in [#213](https://github.com/aurora-silicon/linux/pull/213). 0010–0014 are instrumentation that stays out of the kernel tree. The action-frame patches show the PSF and MIF frames discovery runs on. Little about this protocol is documented, so start there if you're extending this work.
 
