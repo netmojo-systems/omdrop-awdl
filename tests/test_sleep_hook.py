@@ -51,7 +51,13 @@ stub = os.environ["STUB"]
 with open(os.path.join(stub, "calls.log"), "a") as f:
     f.write("brcm_iovar " + " ".join(sys.argv[1:]) + "\n")
 awdl0 = os.path.join(stub, "awdl0")
-if sys.argv[-1] == "create":
+if "--raw" in sys.argv:
+    # A GET writes the bytes of get.<iovar>, or nothing (length 0).
+    src = os.path.join(stub, "get." + sys.argv[sys.argv.index("get") + 1])
+    with open(sys.argv[sys.argv.index("--raw") + 1], "wb") as out:
+        if os.path.exists(src):
+            out.write(open(src, "rb").read())
+elif sys.argv[-1] == "create":
     open(awdl0, "w").close()
 elif sys.argv[-1] == "destroy":
     rc_file = os.path.join(stub, "destroy.rc")
@@ -171,9 +177,24 @@ class SleepHookTests(Harness):
         calls = self.calls()
         self.assertEqual(calls[0], "omdrop-discoverable stop")
         self.assertLess(calls.index("ip link set awdl0 down"),
+                        calls.index("brcm_iovar -i awdl0 set awdl 00000000"))
+        self.assertLess(calls.index("brcm_iovar -i awdl0 set awdl 00000000"),
                         calls.index("brcm_iovar -i awdl0 awdl-if destroy"))
         self.assertFalse((self.stub / "awdl0").exists())
         self.assertIn("removed awdl0", result.stderr)
+
+    def test_with_a_template_loaded_awdl0_is_left_alone(self):
+        # awdl=0 with a template loaded has hung the firmware (023513Z).
+        (self.stub / "awdl0").touch()
+        (self.stub / "get.awdl_payload").write_bytes(b"\0" * 512)
+        result = self.run_hook("pre", "suspend")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        self.assertEqual(calls[0], "omdrop-discoverable stop")
+        self.assertFalse([c for c in calls if " set " in c or c.endswith("destroy")], calls)
+        self.assertNotIn("ip link set awdl0 down", calls)
+        self.assertTrue((self.stub / "awdl0").exists())
+        self.assertIn("an AirDrop template is loaded (512)", result.stderr)
 
     def test_resume_only_clears_the_marker(self):
         self.marker.touch()
