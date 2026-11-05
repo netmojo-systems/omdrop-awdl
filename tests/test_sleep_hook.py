@@ -44,13 +44,6 @@ echo "omdrop-discoverable $*" >> "$STUB/calls.log"
 exit "$(cat "$STUB/stop.rc" 2>/dev/null || echo 0)"
 '''
 
-# Unloading brcmfmac takes awdl0 with it, as the real driver does.
-MODPROBE = r'''#!/usr/bin/env bash
-echo "modprobe $*" >> "$STUB/calls.log"
-[[ $* == "-r brcmfmac" ]] && rm -f "$STUB/awdl0"
-exit 0
-'''
-
 # destroy removes awdl0 unless destroy.rc says it failed; create makes it;
 # anything else succeeds.
 IOVAR = r'''import os, sys
@@ -123,10 +116,6 @@ class Harness(unittest.TestCase):
         executable(bin_ / "sleep", "#!/usr/bin/env bash\nexit 0\n")
         executable(bin_ / "nmcli", "#!/usr/bin/env bash\nexit 0\n")
         executable(bin_ / "systemctl", "#!/usr/bin/env bash\nexit 1\n")
-        executable(bin_ / "modprobe", MODPROBE)
-        self.sysmod = self.stub / "sysmod"
-        for mod in ("brcmfmac_wcc", "brcmfmac", "brcmutil"):
-            (self.sysmod / mod).mkdir(parents=True)
         text = HOOK.read_text()
         self.assertIn("\nLIB=/usr/lib/omdrop\n", text)
         self.hook = root / "omdrop-awdl"
@@ -134,8 +123,7 @@ class Harness(unittest.TestCase):
         self.marker = self.stub / "sleeping"
         self.lock = self.stub / "create.lock"
         self.env = dict(os.environ, STUB=str(self.stub), PATH=f"{bin_}:{os.environ['PATH']}",
-                        AWDL_SLEEP_MARKER=str(self.marker), AWDL_CREATE_LOCK=str(self.lock),
-                        AWDL_SYSMOD=str(self.sysmod))
+                        AWDL_SLEEP_MARKER=str(self.marker), AWDL_CREATE_LOCK=str(self.lock))
 
     def run_hook(self, *args, **env):
         return subprocess.run([str(self.hook), *args], capture_output=True, text=True,
@@ -227,9 +215,7 @@ class SleepHookTests(Harness):
         self.assertEqual(creator.wait(timeout=10), -signal.SIGKILL)
         self.assertTrue(self.lock_is_free(), "a forked holder survived the hook")
 
-    def test_a_refused_destroy_falls_back_to_reloading_the_driver(self):
-        # After a window, the firmware refuses interface_remove (EBADE), so
-        # awdl0 can only go with the driver.
+    def test_failures_are_logged_and_never_block_sleep(self):
         (self.stub / "awdl0").touch()
         (self.stub / "stop.rc").write_text("3")
         (self.stub / "destroy.rc").write_text("1")
@@ -237,20 +223,7 @@ class SleepHookTests(Harness):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("omdrop-discoverable stop exited 3", result.stderr)
         self.assertIn("destroying awdl0 failed: awdl-if destroy -> ENODEV", result.stderr)
-        calls = self.calls()
-        unload = [c for c in calls if c.startswith("modprobe")]
-        self.assertEqual(unload, ["modprobe -r brcmfmac_wcc", "modprobe -r brcmfmac",
-                                  "modprobe -r brcmutil", "modprobe brcmfmac"])
-        self.assertLess(calls.index("brcm_iovar -i awdl0 awdl-if destroy"),
-                        calls.index("modprobe -r brcmfmac"))
-        self.assertFalse((self.stub / "awdl0").exists())
-        self.assertIn("removed awdl0 by reloading brcmfmac", result.stderr)
-
-    def test_a_successful_destroy_leaves_the_driver_loaded(self):
-        (self.stub / "awdl0").touch()
-        result = self.run_hook("pre", "suspend")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(any(c.startswith("modprobe") for c in self.calls()))
+        self.assertTrue((self.stub / "awdl0").exists())
 
 
 @unittest.skipUnless(shutil.which("unshare") and userns_root(),
