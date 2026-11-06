@@ -77,24 +77,10 @@ ip link show "$IF" >/dev/null 2>&1 || exit 0
 
 # The firmware refuses to remove awdl0 (interface_remove, BCME error -EBADE)
 # while AWDL is enabled, and the boot warm-up and every window leave it
-# enabled. With no AirDrop template loaded, turning AWDL off first is safe:
-# the transmit gate does it routinely, and then the destroy succeeds. With a
-# template loaded, which is the state any window leaves behind, awdl=0 has
-# hung the firmware (023513Z), and a zero-length template is rejected, so
-# nothing safe can remove awdl0 then. It is left in place and the hook says so.
-# The window has still been ended above.
-template_len(){
-  local f n
-  f=$(mktemp) || return 1
-  timeout 8 python3 "$LIB/brcm_iovar.py" -i "$IF" get awdl_payload -l 512 --raw "$f" >/dev/null 2>&1
-  n=$(stat -c %s "$f" 2>/dev/null); rm -f "$f"
-  [[ -n $n ]] && printf '%s' "$n"
-}
-tlen=$(template_len)
-if [[ $tlen != 0 ]]; then
-  log "an AirDrop template is loaded (${tlen:-unreadable}); leaving $IF in place: turning AWDL off with one loaded can hang the firmware"
-  exit 0
-fi
+# enabled, so AWDL goes off first. That holds with an AirDrop template loaded
+# too, which is the state any window leaves behind: awdl=0 with a template
+# once hung the firmware (023513Z), on an older driver, but ran 20 times
+# without a hang on linux-aurora 7.2.11 and this package's module.
 
 # Down first, as in the workaround: the netdev's stop path deletes its
 # flowrings before the firmware is asked to drop the interface.

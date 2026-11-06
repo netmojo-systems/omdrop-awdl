@@ -183,18 +183,16 @@ class SleepHookTests(Harness):
         self.assertFalse((self.stub / "awdl0").exists())
         self.assertIn("removed awdl0", result.stderr)
 
-    def test_with_a_template_loaded_awdl0_is_left_alone(self):
-        # awdl=0 with a template loaded has hung the firmware (023513Z).
+    def test_with_a_template_loaded_awdl0_is_still_removed(self):
+        # The state any window leaves behind (#67).
         (self.stub / "awdl0").touch()
         (self.stub / "get.awdl_payload").write_bytes(b"\0" * 512)
         result = self.run_hook("pre", "suspend")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
-        self.assertEqual(calls[0], "omdrop-discoverable stop")
-        self.assertFalse([c for c in calls if " set " in c or c.endswith("destroy")], calls)
-        self.assertNotIn("ip link set awdl0 down", calls)
-        self.assertTrue((self.stub / "awdl0").exists())
-        self.assertIn("an AirDrop template is loaded (512)", result.stderr)
+        self.assertLess(calls.index("brcm_iovar -i awdl0 set awdl 00000000"),
+                        calls.index("brcm_iovar -i awdl0 awdl-if destroy"))
+        self.assertFalse((self.stub / "awdl0").exists())
 
     def test_resume_only_clears_the_marker(self):
         self.marker.touch()
