@@ -24,8 +24,11 @@ LIB=/usr/lib/omdrop
 IF=awdl0
 SLEEPING=${AWDL_SLEEP_MARKER:-/run/awdl-up.sleeping}
 CREATE_LOCK=${AWDL_CREATE_LOCK:-/run/awdl-up.create.lock}
-# awdl-up holds the create lock for at most its 20 s create timeout and 2 s.
-CREATE_WAIT=${AWDL_SLEEP_CREATE_WAIT:-25}
+START_LOCK=${AWDL_START_LOCK:-/run/awdl-discoverable/start.lock}
+# awdl-up holds the create lock for at most its 20 s create timeout and 10 s.
+CREATE_WAIT=${AWDL_SLEEP_CREATE_WAIT:-35}
+# The warm-up's gate holds the start lock for up to 80 s; it is stopped first.
+START_WAIT=${AWDL_SLEEP_START_WAIT:-35}
 log(){ printf 'omdrop-awdl sleep: %s\n' "$*" >&2; }
 
 case ${1:-} in
@@ -36,30 +39,53 @@ esac
 
 : > "$SLEEPING" || log "could not write $SLEEPING; a create may still bring $IF back"
 
-# Every process with the create lock open: awdl-up and the children that
-# inherited its descriptor. Called with descriptor 9 closed, so that the
-# subshells running it don't count, and this shell, which holds the lock too,
-# is left out by pid.
+# Every process with <lock> open, which includes children that inherited the
+# descriptor. Called with descriptors 8 and 9 closed, so that the subshells
+# running it don't count, and this shell, which holds the locks, is left out
+# by pid.
 lock_holders(){
   local fd pid
   for fd in /proc/[0-9]*/fd/*; do
-    [[ $(readlink "$fd" 2>/dev/null) == "$CREATE_LOCK" ]] || continue
+    [[ $(readlink "$fd" 2>/dev/null) == "$1" ]] || continue
     pid=${fd#/proc/}; pid=${pid%%/*}
     [[ $pid == "$$" ]] || printf '%s\n' "$pid"
   done | sort -u
 }
 
+# take <fd> <lock> <seconds> <what>: lock it within <seconds>, or kill its
+# holders until it is free. A holder can fork a child that inherits the
+# descriptor between one scan and its kill, so scan and kill again.
+take(){
+  flock -w "$3" "$1" && return 0
+  local holders
+  for _ in 1 2 3 4 5; do
+    mapfile -t holders < <(lock_holders "$2" 8>&- 9>&-)
+    log "$4 held $2 for $3 s; killing ${holders[*]:-nothing}"
+    (( ${#holders[@]} )) && kill -KILL "${holders[@]}" 2>/dev/null
+    flock -w 1 "$1" && return 0
+  done
+  log "$2 is still held"
+  return 1
+}
+
+# Only the transmit gate turns AWDL on, and it runs under the start lock: in a
+# window's start, in omdrop-core's up hook, and in the boot warm-up. Held from
+# here to exit, it keeps every gate from turning AWDL back on between the
+# awdl=0 and the destroy below. The warm-up's gate can hold it for 80 s, so
+# the warm-up is stopped first; --no-block, because this runs inside the sleep
+# transaction. Taken before the create lock, which a gate's own awdl-up wants.
+systemctl --no-block stop awdl-warmup.service awdl0.service 2>/dev/null
+mkdir -p "${START_LOCK%/*}"
+if exec 8>"$START_LOCK"; then
+  take 8 "$START_LOCK" "$START_WAIT" "a start or the warm-up"
+else
+  log "could not open $START_LOCK"
+fi
+
 # Held until exit, so no create can start between here and the destroy.
 if exec 9>"$CREATE_LOCK"; then
-  if ! flock -w "$CREATE_WAIT" 9; then
-    # Scan and kill until the lock is free: a holder can fork a child that
-    # inherits the descriptor between one scan and its kill.
-    for _ in 1 2 3 4 5; do
-      mapfile -t holders < <(lock_holders 9>&-)
-      log "a create held its lock for ${CREATE_WAIT}s; killing ${holders[*]:-nothing}"
-      (( ${#holders[@]} )) && kill -KILL "${holders[@]}" 2>/dev/null
-      flock -w 1 9 && break
-    done || log "the create lock is still held"
+  if ! flock -n 9; then
+    take 9 "$CREATE_LOCK" "$CREATE_WAIT" "a create"
     # A create the firmware had already accepted registers awdl0 from the
     # driver's event worker, usually within 2 s.
     sleep 2

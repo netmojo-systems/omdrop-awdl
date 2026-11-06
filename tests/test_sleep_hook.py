@@ -91,6 +91,20 @@ open(os.path.join(stub, "awdl0"), "w").close()
 '''
 
 
+# A transmit gate in flight: holds the start lock, says so, and after HOLD
+# seconds turns AWDL on (the SET a review reproduced landing between the
+# hook's awdl=0 and its destroy), then lets go.
+GATE = r'''import fcntl, os, sys, time
+stub, lock, hold = os.environ["STUB"], sys.argv[1], float(sys.argv[2])
+fd = os.open(lock, os.O_WRONLY | os.O_CREAT, 0o644)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(os.path.join(stub, "gate.locked"), "w").close()
+time.sleep(hold)
+with open(os.path.join(stub, "calls.log"), "a") as f:
+    f.write("gate set awdl 01000000\n")
+'''
+
+
 def executable(path, text):
     path.write_text(text)
     path.chmod(0o755)
@@ -129,7 +143,8 @@ class Harness(unittest.TestCase):
         self.marker = self.stub / "sleeping"
         self.lock = self.stub / "create.lock"
         self.env = dict(os.environ, STUB=str(self.stub), PATH=f"{bin_}:{os.environ['PATH']}",
-                        AWDL_SLEEP_MARKER=str(self.marker), AWDL_CREATE_LOCK=str(self.lock))
+                        AWDL_SLEEP_MARKER=str(self.marker), AWDL_CREATE_LOCK=str(self.lock),
+                        AWDL_START_LOCK=str(self.stub / "start.lock"))
 
     def run_hook(self, *args, **env):
         return subprocess.run([str(self.hook), *args], capture_output=True, text=True,
@@ -216,6 +231,22 @@ class SleepHookTests(Harness):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(creator.wait(timeout=10), 0)
         self.assertIn("brcm_iovar -i awdl0 awdl-if destroy", self.calls())
+        self.assertFalse((self.stub / "awdl0").exists())
+
+    def test_a_gate_in_flight_finishes_before_awdl_goes_off(self):
+        (self.stub / "awdl0").touch()
+        gate = subprocess.Popen([sys.executable, "-c", GATE, str(self.stub / "start.lock"), "0.5"],
+                                env=self.env, start_new_session=True)
+        self.addCleanup(self.kill_group, gate)
+        deadline = time.monotonic() + 10
+        while not (self.stub / "gate.locked").exists():
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.01)
+        result = self.run_hook("pre", "suspend")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        self.assertLess(calls.index("gate set awdl 01000000"),
+                        calls.index("brcm_iovar -i awdl0 set awdl 00000000"))
         self.assertFalse((self.stub / "awdl0").exists())
 
     def test_a_create_that_never_lets_go_is_killed_and_sleep_goes_ahead(self):
