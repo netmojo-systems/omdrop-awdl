@@ -11,7 +11,7 @@
 # skips the build entirely (see dkms.conf.in).
 
 pkgname=brcmfmac-awdl-dkms
-pkgver=0.10.4
+pkgver=0.10.5
 pkgrel=1
 _asahitag=asahi-7.2.12-2
 pkgdesc="AWDL (AirDrop link layer) support for Apple Broadcom Wi-Fi (BCM4378, BCM4387, BCM4388): DKMS module and root helpers"
@@ -72,10 +72,13 @@ source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz"
         "0013-brcmfmac-p2p-forward-AWDL-action-frames-from-their-s.patch"
         "0014-brcmfmac-gate-the-AWDL-action-frame-RX-trace-behind-.patch"
         "0015-wifi-brcmfmac-build-against-7.1-and-7.2-headers.patch"
-        "0016-wifi-brcmfmac-report-port-authorization-only-after-t.patch")
+        "0016-wifi-brcmfmac-report-port-authorization-only-after-t.patch"
+        "0017-wifi-brcmfmac-pcie-quiesce-the-IRQ-thread-before-res.patch"
+        "0018-wifi-brcmfmac-keep-fweh-until-P2P-creators-are-done-.patch"
+        "0019-wifi-brcmfmac-close-dynamic-netdevs-before-detach-un.patch")
 # The tarball's hash is filled in once its tag is pushed; the patches are
 # hashed here.
-sha256sums=('88953e32011f0a30b481034ff2e30b27244a3c7b7378cacb1e94f0c6bb1c24cb'
+sha256sums=('c8e12fc0a148e50f51b70556f7063df7a97846c72aa1bd794185de25c44882a5'
             '0b78df75c28fff13fcd3521f98313acc20741d7f54e3f53757e7fad26a9ac123'
             '37e42830356a982cd68ef4b8455e1abfdac33f0de30702e7301ea3d18877c0ca'
             '6da0322a1193c5932d8496ba2d4c75ec5c9606bde7a01c0b7beea2f820c5ab78'
@@ -91,7 +94,10 @@ sha256sums=('88953e32011f0a30b481034ff2e30b27244a3c7b7378cacb1e94f0c6bb1c24cb'
             '1b6899b2127f95f93c90bd8815dda9727c01604273339f96c9344b72d63ab065'
             '2e5b87f8301178b297157196a0eee4b2f53161d05fb2e889e2a6b0f9555c6e00'
             '9749b578488125662b15777014437e1000dcaa71763d9c2c3a5fd5f61bfbedc7'
-            'd8c3d017633febf51e2a8ab3519014a4f747d1a841644047f851404f247552c8')
+            'd8c3d017633febf51e2a8ab3519014a4f747d1a841644047f851404f247552c8'
+            '74f2a4dcdf7918073885d5fc1485cea73465144c978aafbdb97239d9fd70bfbe'
+            '853f5adcac1c2cc238b644680b4ad4012bc45c1279d4bb5399ee312ef5ebe6a1'
+            '78b25f2c0d02a601f873ced87fab3b446d9d67060d795f1553390801ef08125a')
 
 prepare() {
   rm -rf "${srcdir}/kernel"
@@ -172,6 +178,9 @@ package() {
   install -d "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants"
   ln -s ../awdl-warmup.service \
     "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants/awdl-warmup.service"
+  # Ends any window and removes awdl0 before suspend or hibernate (#67).
+  install -Dm755 "${srcdir}/omdrop-awdl-${pkgver}/packaging/omdrop-awdl-sleep" \
+    "${pkgdir}/usr/lib/systemd/system-sleep/omdrop-awdl"
   # Vendor directories, not /etc: both are read after the package's own copy is
   # in place, and both leave an /etc override to the person running the machine.
   install -Dm644 "${srcdir}/omdrop-awdl-${pkgver}/packaging/brcmfmac-awdl.conf" \
