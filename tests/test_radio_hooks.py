@@ -323,13 +323,14 @@ class UpTests(HookHarness):
         self.assertEqual(result.returncode, 3, result.stderr)
         self.assertIn("did not answer a test", result.stderr.splitlines()[-1])
 
-    def test_parked_with_a_template_loaded_exits_3_without_retoggling(self):
+    def test_parked_with_a_template_loaded_still_retoggles(self):
+        # A recreated awdl0 keeps the firmware's template; refusing the
+        # retoggle then parked every first window after a resume.
         self.interface()
         (self.stub / "get.awdl_payload").write_bytes(b"\0" * 512)
         result = self.hook("up")
         self.assertEqual(result.returncode, 3, result.stderr)
-        self.assertIn("Restarting this machine clears it", result.stderr.splitlines()[-1])
-        self.assertNotIn("set awdl ", self.log("iovar.log"))
+        self.assertEqual(self.log("iovar.log").count("set awdl 00000000"), 3)
 
     def test_parked_without_a_template_retoggles_then_exits_3(self):
         self.interface()
@@ -586,14 +587,6 @@ class ReplyFileTests(HookHarness):
         # The RSSI readback, then the election tree and opmode for the template.
         self.assert_fresh_replies(3)
 
-    def test_up_parked_without_a_template(self):
-        for name in ("awdl0", "driver", "linklocal"):
-            (self.stub / name).touch()
-        (self.stub / "awdl_trace").write_text("0")
-        self.assertEqual(self.hook("up").returncode, 3)
-        # The gate's template check, and radio_up's before it picks a sentence.
-        self.assert_fresh_replies(2)
-
 
 class ProcessGroupTests(HookHarness):
     """Core cancels a hook by signalling its process group; nothing may leave it."""
@@ -634,7 +627,8 @@ class ProcessGroupTests(HookHarness):
         (self.stub / "driver").touch()
         env = dict(os.environ, STUB=str(self.stub), PATH=f"{self.bin}:{os.environ['PATH']}",
                    OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub",
-                   AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"))
+                   AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"),
+                   AWDL_CREATE_LOCK=str(self.stub / "awdl-up.create.lock"))
         hook = subprocess.Popen([str(self.lib / "radio" / "up")], stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, env=env, cwd="/", start_new_session=True)
         self.addCleanup(hook.wait)

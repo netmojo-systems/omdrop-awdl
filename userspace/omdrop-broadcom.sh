@@ -282,8 +282,12 @@ open_on_transmit(){
 # on a radio transmitting 20/20). It is sampled by the supervisor and reported
 # through rx_proven, so a panel can tell "advertising" from "answered".
 #
-# Retoggles awdl=0/1 only while NO template is loaded: awdl=0 with awdl_payload
-# set hung the firmware (023513Z), and that dead end needs a module reload.
+# Retoggles awdl=0/1 whether or not a template is loaded. A firmware hang
+# around awdl=0 with awdl_payload set (023513Z) led to a guard against it; on
+# linux-aurora 7.2.11 and on this package's 0001-0019 module it ran 20 times
+# without a hang or a kernel warning (pr69-template-cycle, 2026-11-06). Without
+# the retoggle, a window on a recreated awdl0 -- the first one after every
+# resume, since the sleep hook removes awdl0 -- parks until a driver reload.
 gate(){
   local n try ts
   rx_reset
@@ -297,11 +301,6 @@ gate(){
   n=$(probe_completions) || return 2
   log "gate: probe 20 frames -> $n completions"
   if [[ ${n:-0} -ge 15 ]]; then open_on_transmit probe; return 0; fi
-  local plen; plen=$(iovar_len awdl_payload 512)
-  if [[ ${plen:-0} -gt 0 ]]; then
-    log "gate: template loaded (awdl_payload len $plen); no awdl=0 retoggle (023513Z)"
-    return 1
-  fi
   for try in $(seq 1 "$ENABLES"); do
     iovar_set awdl "$(le32 0)"; sleep 2
     iovar_set awdl "$(le32 1)"; sleep 3
@@ -623,23 +622,7 @@ radio_up(){
        log "gate: data-path probe inconclusive; firmware state unclassified"
        die 3 "AirDrop's radio did not answer a test. Try again in a moment." ;;
     *) set_reason parked
-       # Two different dead ends, and telling the user to "just retry" in the
-       # second one is a lie: a retry five times over twelve minutes got a
-       # byte-identical failure each time. When a template is loaded the gate
-       # refuses the awdl=0 retoggle (023513Z), which is the ONLY thing that
-       # clears a parked path -- so it can never recover itself. The template
-       # cannot be cleared either: a zero-length awdl_payload SET is rejected
-       # BCME_BADARG, and any replacement write still reads back 512 bytes, so
-       # the guard still sees "loaded". A driver reload is the only exit.
-       # The panel shows the last line, so the evidence goes above it and the
-       # sentence a person reads goes last. Naming a reload in a panel is
-       # useless -- there is nothing to press -- and a restart clears the same
-       # state without a terminal.
-       if [[ $(iovar_len awdl_payload 512) -gt 0 ]]; then
-         log "parked with a template loaded (023513Z): the gate cannot retoggle awdl, retrying is byte-identical. Reload to clear: pkexec $LIB/awdl-up --reload (~15 s of Wi-Fi)."
-         die 3 "AirDrop's radio is stuck and cannot restart itself. Restarting this machine clears it."
-       fi
-       log "parked after $ENABLES enables; no template loaded, so a retoggle can still clear it"
+       log "parked after $ENABLES enables"
        die 3 "AirDrop's radio would not start transmitting. Try again -- a second attempt usually works." ;;
   esac
 

@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# systemd-sleep hook: end any AirDrop window and remove awdl0 before the
+# machine sleeps, and create no awdl0 until it has resumed (#67).
+#
+# On a BCM4387 one s2idle resume in twenty left wlan0 unable to associate
+# until a reboot, and it was the only one of the twenty with awdl0 present.
+# The reporter's workaround has held since: stop the window, then take awdl0
+# down and delete it before suspend. This hook does the same, and also stops
+# a create that is starting up or in flight from bringing awdl0 back. That
+# can be the boot-time warm-up, awdl0.service, or a window's start.
+#
+# Every awdl0 is created by awdl-up, under its create lock, and awdl-up
+# refuses to create one while $SLEEPING exists. So the order before sleep is:
+# write the marker, wait for any create in flight to finish, end the window,
+# then remove whatever awdl0 is left. On resume the marker goes, and the next
+# window creates awdl0 again.
+#
+# It runs as root from systemd-sleep, so it doesn't use polkit, and its
+# output goes to the journal under systemd-sleep. A failure here must not
+# hold up suspend, so every step is best-effort and the hook always exits 0.
+set -u
+
+LIB=/usr/lib/omdrop
+IF=awdl0
+SLEEPING=${AWDL_SLEEP_MARKER:-/run/awdl-up.sleeping}
+CREATE_LOCK=${AWDL_CREATE_LOCK:-/run/awdl-up.create.lock}
+START_LOCK=${AWDL_START_LOCK:-/run/awdl-discoverable/start.lock}
+# awdl-up holds the create lock for at most its 20 s create timeout and 10 s.
+CREATE_WAIT=${AWDL_SLEEP_CREATE_WAIT:-35}
+# The warm-up's gate holds the start lock for up to 80 s; it is stopped first.
+START_WAIT=${AWDL_SLEEP_START_WAIT:-35}
+log(){ printf 'omdrop-awdl sleep: %s\n' "$*" >&2; }
+
+case ${1:-} in
+  pre) ;;
+  post) rm -f "$SLEEPING"; exit 0 ;;
+  *) exit 0 ;;
+esac
+
+: > "$SLEEPING" || log "could not write $SLEEPING; a create may still bring $IF back"
+
+# Every process with <lock> open, which includes children that inherited the
+# descriptor. Called with descriptors 8 and 9 closed, so that the subshells
+# running it don't count, and this shell, which holds the locks, is left out
+# by pid.
+lock_holders(){
+  # One find, not a readlink per descriptor: a desktop can have thousands.
+  find /proc/[0-9]*/fd -maxdepth 1 -lname "$1" 2>/dev/null \
+    | awk -F/ -v self="$$" '$3 != self { print $3 }' | sort -u
+}
+
+# take <fd> <lock> <seconds> <what>: lock it within <seconds>, or kill its
+# holders until it is free. A holder can fork a child that inherits the
+# descriptor between one scan and its kill, so scan and kill again.
+take(){
+  flock -w "$3" "$1" && return 0
+  local holders
+  for _ in 1 2 3 4 5; do
+    mapfile -t holders < <(lock_holders "$2" 8>&- 9>&-)
+    log "$4 held $2 for $3 s; killing ${holders[*]:-nothing}"
+    (( ${#holders[@]} )) && kill -KILL "${holders[@]}" 2>/dev/null
+    flock -w 1 "$1" && return 0
+  done
+  log "$2 is still held"
+  return 1
+}
+
+# Only the transmit gate turns AWDL on, and it runs under the start lock: in a
+# window's start, in omdrop-core's up hook, and in the boot warm-up. Held from
+# here to exit, it keeps every gate from turning AWDL back on between the
+# awdl=0 and the destroy below. The warm-up's gate can hold it for 80 s, so
+# the warm-up is stopped first; --no-block, because this runs inside the sleep
+# transaction. Taken before the create lock, which a gate's own awdl-up wants.
+systemctl --no-block stop awdl-warmup.service awdl0.service 2>/dev/null
+# The run directory may be left from an older helper that ran under a loose
+# umask. Make it a directory only root can write, as the helpers' run_dir()
+# does, before opening anything in it: otherwise another user could put a link
+# at start.lock and have root write through it. Opened for append, so a
+# planted regular file is never truncated either.
+safe_run_dir(){
+  local d=${START_LOCK%/*}
+  if [[ -L $d ]]; then rm -f -- "$d" || return 1; fi
+  mkdir -p -m 755 -- "$d" 2>/dev/null
+  [[ -d $d && ! -L $d ]] || return 1
+  [[ -O $d ]] || chown -h -- "$EUID" "$d" || return 1
+  chmod go-w -- "$d" || return 1
+  if [[ -L $START_LOCK ]]; then rm -f -- "$START_LOCK" || return 1; fi
+}
+if safe_run_dir && exec 8>>"$START_LOCK"; then
+  take 8 "$START_LOCK" "$START_WAIT" "a start or the warm-up"
+else
+  log "could not open $START_LOCK safely; a gate may still turn AWDL back on"
+fi
+
+# Held until exit, so no create can start between here and the destroy.
+if exec 9>>"$CREATE_LOCK"; then
+  if ! flock -n 9; then
+    take 9 "$CREATE_LOCK" "$CREATE_WAIT" "a create"
+    # A create the firmware had already accepted registers awdl0 from the
+    # driver's event worker, usually within 2 s.
+    sleep 2
+  fi
+else
+  log "could not open $CREATE_LOCK"
+fi
+
+# Ends this package's window and omdrop-core's: stop signals both supervisors.
+# Bounded: it waits for supervisors and for Avahi, and sleep must not wait on
+# either indefinitely.
+if [[ -x $LIB/omdrop-discoverable ]]; then
+  timeout -k 2 20 "$LIB/omdrop-discoverable" stop || log "omdrop-discoverable stop exited $?"
+fi
+
+ip link show "$IF" >/dev/null 2>&1 || exit 0
+
+# The firmware refuses to remove awdl0 (interface_remove, BCME error -EBADE)
+# while AWDL is enabled, and the boot warm-up and every window leave it
+# enabled, so AWDL goes off first. That holds with an AirDrop template loaded
+# too, which is the state any window leaves behind: awdl=0 with a template
+# was blamed for a firmware hang (023513Z), but ran 20 times
+# without a hang on linux-aurora 7.2.11 and this package's module.
+
+# Down first, as in the workaround. That only clears carrier and stops
+# transmission on awdl0; it does not delete its flowrings.
+ip link set "$IF" down 2>/dev/null || log "could not take $IF down"
+timeout 8 python3 "$LIB/brcm_iovar.py" -i "$IF" set awdl 00000000 >/dev/null 2>&1 \
+  || log "could not turn AWDL off; the destroy will probably be refused"
+if ! out=$(timeout 8 python3 "$LIB/brcm_iovar.py" -i "$IF" awdl-if destroy 2>&1); then
+  log "destroying $IF failed: ${out##*$'\n'}"
+  exit 0
+fi
+# The vendor command only asks the firmware; the interface goes when its
+# IF_DEL event is handled.
+for _ in {1..20}; do
+  ip link show "$IF" >/dev/null 2>&1 || { log "removed $IF"; exit 0; }
+  sleep 0.1
+done
+log "$IF still present 2 s after the destroy request"
+exit 0

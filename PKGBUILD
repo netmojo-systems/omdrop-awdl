@@ -143,6 +143,9 @@ package() {
   install -d "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants"
   ln -s ../awdl-warmup.service \
     "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants/awdl-warmup.service"
+  # Ends any window and removes awdl0 before suspend or hibernate (#67).
+  install -Dm755 "${startdir}/packaging/omdrop-awdl-sleep" \
+    "${pkgdir}/usr/lib/systemd/system-sleep/omdrop-awdl"
   # Vendor directories, not /etc: both are read after the package's own copy is
   # in place, and both leave an /etc override to the person running the machine.
   install -Dm644 "${startdir}/packaging/brcmfmac-awdl.conf" \

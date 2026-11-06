@@ -48,8 +48,7 @@ awdl0_ready || timeout --foreground 60 "$LIB/awdl-up" >/dev/null 2>&1
 exec 7>"${AWDL_UP_LOCK:-/run/awdl-up.lock}"
 flock -w 180 7 || die 3 "warm-up: awdl-up held its lock for 180 s; skipping"
 awdl0_ready || die 4 "warm-up: no awdl0"
-# A loaded template means a window already ran: awdl is warm, and the gate
-# must not retoggle awdl with one loaded (023513Z).
+# A loaded template means a window already ran, so awdl is already warm.
 plen=$(iovar_len awdl_payload 512)
 if [[ ${plen:-0} -gt 0 ]]; then
   log "warm-up: a window already ran (awdl_payload len $plen); nothing to do"
