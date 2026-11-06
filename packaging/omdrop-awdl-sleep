@@ -44,12 +44,9 @@ esac
 # running it don't count, and this shell, which holds the locks, is left out
 # by pid.
 lock_holders(){
-  local fd pid
-  for fd in /proc/[0-9]*/fd/*; do
-    [[ $(readlink "$fd" 2>/dev/null) == "$1" ]] || continue
-    pid=${fd#/proc/}; pid=${pid%%/*}
-    [[ $pid == "$$" ]] || printf '%s\n' "$pid"
-  done | sort -u
+  # One find, not a readlink per descriptor: a desktop can have thousands.
+  find /proc/[0-9]*/fd -maxdepth 1 -lname "$1" 2>/dev/null \
+    | awk -F/ -v self="$$" '$3 != self { print $3 }' | sort -u
 }
 
 # take <fd> <lock> <seconds> <what>: lock it within <seconds>, or kill its
@@ -75,15 +72,28 @@ take(){
 # the warm-up is stopped first; --no-block, because this runs inside the sleep
 # transaction. Taken before the create lock, which a gate's own awdl-up wants.
 systemctl --no-block stop awdl-warmup.service awdl0.service 2>/dev/null
-mkdir -p "${START_LOCK%/*}"
-if exec 8>"$START_LOCK"; then
+# The run directory may be left from an older helper that ran under a loose
+# umask. Make it a directory only root can write, as the helpers' run_dir()
+# does, before opening anything in it: otherwise another user could put a link
+# at start.lock and have root write through it. Opened for append, so a
+# planted regular file is never truncated either.
+safe_run_dir(){
+  local d=${START_LOCK%/*}
+  if [[ -L $d ]]; then rm -f -- "$d" || return 1; fi
+  mkdir -p -m 755 -- "$d" 2>/dev/null
+  [[ -d $d && ! -L $d ]] || return 1
+  [[ -O $d ]] || chown -h -- "$EUID" "$d" || return 1
+  chmod go-w -- "$d" || return 1
+  if [[ -L $START_LOCK ]]; then rm -f -- "$START_LOCK" || return 1; fi
+}
+if safe_run_dir && exec 8>>"$START_LOCK"; then
   take 8 "$START_LOCK" "$START_WAIT" "a start or the warm-up"
 else
-  log "could not open $START_LOCK"
+  log "could not open $START_LOCK safely; a gate may still turn AWDL back on"
 fi
 
 # Held until exit, so no create can start between here and the destroy.
-if exec 9>"$CREATE_LOCK"; then
+if exec 9>>"$CREATE_LOCK"; then
   if ! flock -n 9; then
     take 9 "$CREATE_LOCK" "$CREATE_WAIT" "a create"
     # A create the firmware had already accepted registers awdl0 from the
@@ -95,8 +105,10 @@ else
 fi
 
 # Ends this package's window and omdrop-core's: stop signals both supervisors.
+# Bounded: it waits for supervisors and for Avahi, and sleep must not wait on
+# either indefinitely.
 if [[ -x $LIB/omdrop-discoverable ]]; then
-  "$LIB/omdrop-discoverable" stop || log "omdrop-discoverable stop exited $?"
+  timeout -k 2 20 "$LIB/omdrop-discoverable" stop || log "omdrop-discoverable stop exited $?"
 fi
 
 ip link show "$IF" >/dev/null 2>&1 || exit 0
@@ -108,8 +120,8 @@ ip link show "$IF" >/dev/null 2>&1 || exit 0
 # was blamed for a firmware hang (023513Z), but ran 20 times
 # without a hang on linux-aurora 7.2.11 and this package's module.
 
-# Down first, as in the workaround: the netdev's stop path deletes its
-# flowrings before the firmware is asked to drop the interface.
+# Down first, as in the workaround. That only clears carrier and stops
+# transmission on awdl0; it does not delete its flowrings.
 ip link set "$IF" down 2>/dev/null || log "could not take $IF down"
 timeout 8 python3 "$LIB/brcm_iovar.py" -i "$IF" set awdl 00000000 >/dev/null 2>&1 \
   || log "could not turn AWDL off; the destroy will probably be refused"

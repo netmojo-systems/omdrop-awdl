@@ -249,6 +249,20 @@ class SleepHookTests(Harness):
                         calls.index("brcm_iovar -i awdl0 set awdl 00000000"))
         self.assertFalse((self.stub / "awdl0").exists())
 
+    def test_a_link_planted_at_the_start_lock_is_not_written_through(self):
+        # A run directory left writable by an older helper (Greptile on #69).
+        run = self.stub / "run"
+        run.mkdir()
+        run.chmod(0o777)
+        victim = self.stub / "victim"
+        victim.write_text("keep me\n")
+        (run / "start.lock").symlink_to(victim)
+        result = self.run_hook("pre", "suspend", AWDL_START_LOCK=str(run / "start.lock"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(victim.read_text(), "keep me\n")
+        self.assertFalse((run / "start.lock").is_symlink())
+        self.assertEqual(run.stat().st_mode & 0o022, 0)
+
     def test_a_create_that_never_lets_go_is_killed_and_sleep_goes_ahead(self):
         creator = self.creator("forever")
         result = self.run_hook("pre", "suspend", AWDL_SLEEP_CREATE_WAIT="1")
