@@ -46,7 +46,7 @@ sudo systemctl mask awdl-warmup.service
 
 To create `awdl0` at boot without the warm-up, mask it as above and run `sudo systemctl enable awdl0.service`. If you enabled `awdl0.service` before the warm-up existed, you can leave it enabled: the two don't interfere.
 
-Before the machine suspends or hibernates, a sleep hook ends any open window and removes `awdl0`. Until it resumes, `awdl-up` creates no `awdl0`. That covers a warm-up, `awdl0.service` or a window's start that is still running, and the hook waits for a create already in flight to land and then removes it. On one MacBook Air M2, the only s2idle resume in twenty that left Wi-Fi unable to associate until a reboot was the one with `awdl0` present ([#67](https://github.com/netmojo-systems/omdrop-awdl/issues/67)). Nothing recreates `awdl0` on resume, so the first window after a resume takes about a minute, like the first window after a boot without the warm-up. **Known gap:** once a window has run since boot, the hook ends it but can't remove `awdl0`, which then stays present through the suspend ([#67](https://github.com/netmojo-systems/omdrop-awdl/issues/67)).
+Before the machine suspends or hibernates, a sleep hook ends any open window, turns AWDL off and removes `awdl0`: the firmware refuses to remove it while AWDL is on. Until it resumes, `awdl-up` creates no `awdl0`. That covers a warm-up, `awdl0.service` or a window's start that is still running, and the hook waits for a create already in flight to land and then removes it. On one MacBook Air M2, the only s2idle resume in twenty that left Wi-Fi unable to associate until a reboot was the one with `awdl0` present ([#67](https://github.com/netmojo-systems/omdrop-awdl/issues/67)). Nothing recreates `awdl0` on resume, so the first window after a resume rebuilds it, which takes from about 20 seconds to a minute.
 
 If a kernel update breaks the DKMS build, the stock `brcmfmac` loads instead: DKMS sets the kernel's own driver aside only when its build installs, and puts it back when the package is removed. You lose AWDL, not the network.
 
@@ -73,7 +73,7 @@ On a kernel whose own `brcmfmac` already has this AWDL support, DKMS skips the b
 | `/usr/lib/omdrop/awdl-warmup` | Creates `awdl0` and proves it transmits once; run at boot by `awdl-warmup.service` |
 | `/usr/lib/systemd/system/awdl-warmup.service` | Boot-time `awdl0` setup and warm-up; enabled by the install |
 | `/usr/lib/systemd/system/awdl0.service` | Boot-time `awdl0` setup without the warm-up; not enabled by the install |
-| `/usr/lib/systemd/system-sleep/omdrop-awdl` | Before suspend or hibernate, ends any window and removes `awdl0` if no window has run since boot |
+| `/usr/lib/systemd/system-sleep/omdrop-awdl` | Before suspend or hibernate, ends any window and removes `awdl0` |
 | `/usr/lib/modprobe.d/brcmfmac-awdl.conf` | `debug=0x1000`, the firmware-interface bit of the debug mask; the data-path check doesn't depend on it |
 | `/usr/lib/NetworkManager/conf.d/99-awdl-unmanaged.conf` | Keeps NetworkManager off `awdl0` |
 | `/usr/share/doc/brcmfmac-awdl-dkms/` | This README, and an optional `10-wld0.link` the package doesn't activate |
