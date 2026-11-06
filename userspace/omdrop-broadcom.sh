@@ -282,8 +282,8 @@ open_on_transmit(){
 # on a radio transmitting 20/20). It is sampled by the supervisor and reported
 # through rx_proven, so a panel can tell "advertising" from "answered".
 #
-# Retoggles awdl=0/1 whether or not a template is loaded. awdl=0 with
-# awdl_payload set once hung the firmware (023513Z), on an older driver; on
+# Retoggles awdl=0/1 whether or not a template is loaded. A firmware hang
+# around awdl=0 with awdl_payload set (023513Z) led to a guard against it; on
 # linux-aurora 7.2.11 and on this package's 0001-0019 module it ran 20 times
 # without a hang or a kernel warning (pr69-template-cycle, 2026-11-06). Without
 # the retoggle, a window on a recreated awdl0 -- the first one after every

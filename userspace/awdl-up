@@ -11,8 +11,8 @@
 # not write a PSF template, and starts no announcer. An always-on AWDL keeps the
 # radio leaving the infra channel on its slot schedule -- that costs battery and
 # STA throughput, and it would keep two known failure modes live during ordinary
-# laptop use: the ~50% parked data path, and the firmware hang seen when `awdl=0`
-# runs with a template loaded (023513Z). So boot leaves a configured, idle
+# laptop use: the ~50% parked data path, and the 023513Z firmware hang, recorded
+# around `awdl=0` with a template loaded. So boot leaves a configured, idle
 # interface, and `omdrop-discoverable start` does the enable/gate/announce work
 # for the length of a user-requested window. Cost of that choice: the first
 # press of the button pays the gate (15-60 s), not the boot.
@@ -77,8 +77,10 @@ iovar_bytes(){ local out=/run/awdl-up.readback; rm -f "$out"
 # SET-only while it is disabled, so there is nothing safe to do.
 awdl_enabled(){ [[ $(iovar_bytes awdl 4) -gt 0 ]] || return 1
                 [[ $(od -An -tu1 -N1 /run/awdl-up.readback | tr -d ' ') != 0 ]]; }
-# A loaded PSF template makes `awdl=0` unsafe: 023513Z hung the firmware doing
-# exactly that. Reconfiguring then needs a driver reload, not a retoggle.
+# A loaded PSF template: the schedule is not rewritten then. That is a
+# conservative policy kept from the 023513Z incident, a firmware hang around
+# `awdl=0` with a template loaded. Since then awdl=0 with a template has run
+# cleanly in the gate, but a full schedule rewrite in that state is untested.
 template_loaded(){ [[ $(iovar_bytes awdl_payload 512) -gt 0 ]]; }
 
 # Channel sequence and availability windows. SET-only while AWDL is disabled,
@@ -113,7 +115,7 @@ reconfigure_or_skip(){
     log "AWDL is enabled (a window is live); leaving the schedule alone"; return 0
   fi
   if template_loaded; then
-    log "a PSF template is loaded; not touching awdl=0 (023513Z hang) -- reload the driver to reconfigure"
+    log "a PSF template is loaded; not rewriting the schedule -- reload the driver to reconfigure"
     return 0
   fi
   apply_schedule
@@ -155,9 +157,9 @@ regdom_report(){
 }
 
 # --reload: the only way to change chan_seq once a window has run. A PSF
-# template persists in the firmware until the module is unloaded, and `awdl=0`
-# with one loaded hung the firmware once -- so reconfiguring safely means
-# starting the firmware over. Unloading takes awdl0 and the Wi-Fi link with it;
+# template persists in the firmware until the module is unloaded, and a
+# schedule rewrite with one loaded is untested (see template_loaded) -- so
+# reconfiguring means starting the firmware over. Unloading takes awdl0 and the Wi-Fi link with it;
 # NetworkManager brings the Wi-Fi interface back on its own, and the caller
 # waits for the MAC to settle exactly as a boot does.
 #

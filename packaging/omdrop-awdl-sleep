@@ -105,7 +105,7 @@ ip link show "$IF" >/dev/null 2>&1 || exit 0
 # while AWDL is enabled, and the boot warm-up and every window leave it
 # enabled, so AWDL goes off first. That holds with an AirDrop template loaded
 # too, which is the state any window leaves behind: awdl=0 with a template
-# once hung the firmware (023513Z), on an older driver, but ran 20 times
+# was blamed for a firmware hang (023513Z), but ran 20 times
 # without a hang on linux-aurora 7.2.11 and this package's module.
 
 # Down first, as in the workaround: the netdev's stop path deletes its
