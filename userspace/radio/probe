@@ -16,6 +16,14 @@
 # loaded module, and from modinfo for the one the running kernel would load.
 # A loaded switch reading 0 is AWDL turned off, not missing.
 #
+# module: where AWDL comes from on the running kernel, so Omdrop can describe
+#   an update truthfully without guessing from paths or version numbers.
+#   "kernel": the kernel's own brcmfmac has AWDL, and dkms.conf.in stands aside
+#     for it, so this package supplies only its userspace.
+#   "dkms": it does not, so AWDL needs this package's DKMS build.
+#   "unknown": that cannot be read (no hardware, no module tree, no modinfo).
+#   The test is dkms.conf.in's _awdl_native, so the two always agree.
+#
 # Exit 0: the JSON object on stdout.
 #      2: usage.
 set -uo pipefail
@@ -71,6 +79,37 @@ if [[ $hardware == true && $loaded_awdl == false && -d ${OMDROP_RADIO_TEST_ROOT:
   [[ $'\n'$parm == *$'\n'awdl_create_flags:* || $'\n'$parm == *$'\n'awdl:* ]] && installed=yes || installed=no
 fi
 
+# The running kernel's own brcmfmac, as dkms.conf.in's _awdl_native reads it:
+# the in-tree module, the copy DKMS archives from it, or a built-in one. A
+# kernel that has neither the module nor a built-in entry has no brcmfmac of
+# its own, so AWDL can only be ours. Any read that fails leaves it unknown.
+module=unknown
+kv=$(uname -r)
+mods=${OMDROP_RADIO_TEST_ROOT:-}/lib/modules/$kv
+if [[ $hardware == true && -d $mods ]] && command -v modinfo >/dev/null 2>&1; then
+  module=dkms
+  for f in "$mods/kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko"* \
+           "${OMDROP_RADIO_TEST_ROOT:-}/var/lib/dkms/brcmfmac-awdl/original_module/$kv/"*/brcmfmac.ko*; do
+    [[ -f $f && $f != *.origin ]] || continue
+    if ! parm=$(modinfo -F parm "$f" 2>/dev/null); then
+      module=unknown
+      break
+    fi
+    if [[ $'\n'$parm == *$'\n'awdl_create_flags:* || $'\n'$parm == *$'\n'awdl:* ]]; then
+      module=kernel
+      break
+    fi
+  done
+  b=$mods/modules.builtin.modinfo
+  if [[ $module == dkms && -e $b ]]; then
+    if ! p=$(tr '\0' '\n' < "$b" 2>/dev/null); then
+      module=unknown
+    elif [[ $'\n'$p == *$'\n'brcmfmac.parm=awdl_create_flags:* || $'\n'$p == *$'\n'brcmfmac.parm=awdl:* ]]; then
+      module=kernel
+    fi
+  fi
+fi
+
 # Every say is a fixed string: nothing read from the system goes into the JSON.
 missing=
 if [[ $hardware == false ]]; then
@@ -90,5 +129,5 @@ elif [[ $installed == yes ]]; then
 else
   missing='{"id":"radio","say":"The Wi-Fi driver running now is the kernel'"'"'s own, which cannot do AirDrop; restart, and if this message remains, rebuild AirDrop'"'"'s driver with sudo dkms autoinstall."}'
 fi
-printf '{"backend":"awdl","version":"%s","contract":"%s","hooks":1,"hardware":%s,"missing":[%s]}\n' \
-  "$VERSION" "$VERSION" "$hardware" "$missing"
+printf '{"backend":"awdl","version":"%s","contract":"%s","hooks":1,"hardware":%s,"module":"%s","missing":[%s]}\n' \
+  "$VERSION" "$VERSION" "$hardware" "$module" "$missing"
