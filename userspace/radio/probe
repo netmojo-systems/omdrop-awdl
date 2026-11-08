@@ -21,8 +21,12 @@
 #   "kernel": the kernel's own brcmfmac has AWDL, and dkms.conf.in stands aside
 #     for it, so this package supplies only its userspace.
 #   "dkms": it does not, so AWDL needs this package's DKMS build.
-#   "unknown": that cannot be read (no hardware, no module tree, no modinfo).
-#   The test is dkms.conf.in's _awdl_native, so the two always agree.
+#   "unknown": that cannot be read (no hardware, no module tree, no modinfo,
+#     or a module modinfo cannot read).
+#   The markers and places looked are dkms.conf.in's _awdl_native, so where
+#   every read succeeds the two agree. On a failed read they part: DKMS moves
+#   on to the next candidate, while the probe says unknown, which Omdrop
+#   treats as no claim either way.
 #
 # Exit 0: the JSON object on stdout.
 #      2: usage.
