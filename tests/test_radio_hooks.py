@@ -786,11 +786,35 @@ class ProbeTests(unittest.TestCase):
 
     def installed(self, awdl, release=None, marker="awdl_create_flags"):
         # The brcmfmac the running kernel would load, as modinfo reports it.
-        (self.root / "test-root" / "lib" / "modules" / (release or os.uname().release)).mkdir(parents=True)
-        parm = f"{marker}:AWDL (int)\\nawdl_trace:Log AWDL tx completions (int)\\n" if awdl else ""
+        (self.root / "test-root" / "lib" / "modules" / (release or os.uname().release)).mkdir(parents=True, exist_ok=True)
+        parm = f"{marker}:AWDL (int)\nawdl_trace:Log AWDL tx completions (int)\n" if awdl else ""
+        (self.root / "parm.name").write_text("roamoff:Do not use internal roaming engine (int)\n" + parm)
+        self.modinfo()
+
+    def modinfo(self):
+        # By module name: parm.name. By file: parm.file, or a failure without it.
         (self.root / "bin").mkdir(exist_ok=True)
-        executable(self.root / "bin" / "modinfo",
-                   f'#!/usr/bin/env bash\nprintf "roamoff:Do not use internal roaming engine (int)\\n{parm}"\n')
+        executable(self.root / "bin" / "modinfo", f"""#!/usr/bin/env bash
+case ${{@: -1}} in
+  */*) [[ -e {self.root}/parm.file ]] || exit 1; cat {self.root}/parm.file ;;
+  *) cat {self.root}/parm.name 2>/dev/null ;;
+esac
+""")
+
+    def kernels_own(self, awdl, builtin=False, marker="awdl"):
+        # The running kernel's own brcmfmac: an in-tree file, or built in.
+        mods = self.root / "test-root" / "lib" / "modules" / os.uname().release
+        parm = f"{marker}:Enable AWDL (int)\n" if awdl else "roamoff:Do not roam (int)\n"
+        if builtin:
+            mods.mkdir(parents=True, exist_ok=True)
+            entry = "brcmfmac.parm=" + parm.rstrip("\n")
+            (mods / "modules.builtin.modinfo").write_bytes(f"cfg80211.file=x\0{entry}\0".encode())
+        else:
+            ko = mods / "kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko.zst"
+            ko.parent.mkdir(parents=True)
+            ko.touch()
+            (self.root / "parm.file").write_text(parm)
+        self.modinfo()
 
     def loaded(self, awdl, switch=None):
         # switch: the awdl on/off parameter's value, for the series as
@@ -862,7 +886,47 @@ class ProbeTests(unittest.TestCase):
         self.loaded(awdl=True)
         self.assertEqual(self.answer(), {"backend": "awdl", "version": "0.9.1",
                                          "contract": "0.9.1", "hooks": 1,
-                                         "hardware": True, "missing": []})
+                                         "hardware": True, "module": "unknown",
+                                         "missing": []})
+
+    def test_a_kernel_whose_own_brcmfmac_has_awdl_supplies_the_module(self):
+        self.pci("0x14e4", "0x028000")
+        for marker in ("awdl", "awdl_create_flags"):
+            with self.subTest(marker=marker):
+                shutil.rmtree(self.root / "test-root" / "lib", ignore_errors=True)
+                self.kernels_own(awdl=True, marker=marker)
+                self.assertEqual(self.answer()["module"], "kernel")
+
+    def test_a_built_in_brcmfmac_with_awdl_supplies_the_module(self):
+        self.loaded(awdl=True, switch=1)
+        self.kernels_own(awdl=True, builtin=True)
+        self.assertEqual(self.answer()["module"], "kernel")
+
+    def test_a_stock_kernel_brcmfmac_leaves_awdl_to_dkms(self):
+        # Whether or not our build is the one loaded: the source, not the state.
+        for awdl_loaded in (True, False):
+            with self.subTest(awdl_loaded=awdl_loaded):
+                shutil.rmtree(self.root / "test-root", ignore_errors=True)
+                self.setUp()
+                self.loaded(awdl=awdl_loaded)
+                self.kernels_own(awdl=False)
+                self.assertEqual(self.answer()["module"], "dkms")
+
+    def test_a_kernel_with_no_brcmfmac_of_its_own_leaves_awdl_to_dkms(self):
+        self.loaded(awdl=True)
+        self.installed(awdl=True)
+        self.assertEqual(self.answer()["module"], "dkms")
+
+    def test_an_unreadable_kernel_module_is_unknown_not_dkms(self):
+        self.loaded(awdl=True)
+        self.kernels_own(awdl=True)
+        (self.root / "parm.file").unlink()
+        self.assertEqual(self.answer()["module"], "unknown")
+
+    def test_no_hardware_or_no_module_tree_is_unknown(self):
+        self.assertEqual(self.answer()["module"], "unknown")
+        self.loaded(awdl=True)
+        self.assertEqual(self.answer()["module"], "unknown")
 
     def test_the_kernels_own_driver_loaded_in_place_of_ours_is_missing_the_radio(self):
         self.loaded(awdl=False)
