@@ -11,7 +11,7 @@
 # skips the build entirely (see dkms.conf.in).
 
 pkgname=brcmfmac-awdl-dkms
-pkgver=0.10.5
+pkgver=0.10.6
 pkgrel=1
 _asahitag=asahi-7.2.12-2
 pkgdesc="AWDL (AirDrop link layer) support for Apple Broadcom Wi-Fi (BCM4378, BCM4387, BCM4388): DKMS module and root helpers"
@@ -78,7 +78,7 @@ source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz"
         "0019-wifi-brcmfmac-close-dynamic-netdevs-before-detach-un.patch")
 # The tarball's hash is filled in once its tag is pushed; the patches are
 # hashed here.
-sha256sums=('c8e12fc0a148e50f51b70556f7063df7a97846c72aa1bd794185de25c44882a5'
+sha256sums=('c598b21dd2b444b3a790d84cdeb7757cc62643b5394098fa608311e142a74700'
             '0b78df75c28fff13fcd3521f98313acc20741d7f54e3f53757e7fad26a9ac123'
             '37e42830356a982cd68ef4b8455e1abfdac33f0de30702e7301ea3d18877c0ca'
             '6da0322a1193c5932d8496ba2d4c75ec5c9606bde7a01c0b7beea2f820c5ab78'
