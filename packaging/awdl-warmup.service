@@ -1,8 +1,8 @@
 # awdl0 at boot, warmed up: the first discoverability window opens in seconds
 # instead of about a minute. Creates awdl0 like awdl0.service, then proves the
 # radio transmits once and leaves AWDL enabled. Its probe frames carry no
-# AirDrop records, so it advertises nothing. The package
-# enables it; `systemctl mask awdl-warmup.service` turns it off. It can run
+# AirDrop records, so it advertises nothing. The package does not enable it,
+# because it turns AWDL on at boot: `systemctl enable awdl-warmup.service`. It can run
 # beside awdl0.service, which earlier versions told users to enable: awdl-up
 # takes a lock, so whichever runs second finds awdl0 already there.
 #

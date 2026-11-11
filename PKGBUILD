@@ -138,11 +138,9 @@ package() {
     "${pkgdir}/usr/lib/systemd/system/awdl0.service"
   install -Dm644 "${startdir}/packaging/awdl-warmup.service" \
     "${pkgdir}/usr/lib/systemd/system/awdl-warmup.service"
-  # Enabled by default, as a vendor wants link: `systemctl mask
-  # awdl-warmup.service` turns it off, and a package upgrade leaves that alone.
-  install -d "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants"
-  ln -s ../awdl-warmup.service \
-    "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants/awdl-warmup.service"
+  # Not enabled by the package: the warm-up turns AWDL on at boot, so it is
+  # the user's choice (`systemctl enable awdl-warmup.service`), as omarchy-pkgs
+  # asked.
   # Ends any window and removes awdl0 before suspend or hibernate (#67).
   install -Dm755 "${startdir}/packaging/omdrop-awdl-sleep" \
     "${pkgdir}/usr/lib/systemd/system-sleep/omdrop-awdl"
