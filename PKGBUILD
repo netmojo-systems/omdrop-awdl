@@ -11,7 +11,7 @@
 # skips the build entirely (see dkms.conf.in).
 
 pkgname=brcmfmac-awdl-dkms
-pkgver=0.10.6
+pkgver=0.10.7
 pkgrel=1
 _asahitag=asahi-7.2.12-2
 pkgdesc="AWDL (AirDrop link layer) support for Apple Broadcom Wi-Fi (BCM4378, BCM4387, BCM4388): DKMS module and root helpers"
@@ -138,11 +138,9 @@ package() {
     "${pkgdir}/usr/lib/systemd/system/awdl0.service"
   install -Dm644 "${startdir}/packaging/awdl-warmup.service" \
     "${pkgdir}/usr/lib/systemd/system/awdl-warmup.service"
-  # Enabled by default, as a vendor wants link: `systemctl mask
-  # awdl-warmup.service` turns it off, and a package upgrade leaves that alone.
-  install -d "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants"
-  ln -s ../awdl-warmup.service \
-    "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants/awdl-warmup.service"
+  # Not enabled by the package: the warm-up turns AWDL on at boot, so it is
+  # the user's choice (`systemctl enable awdl-warmup.service`), as omarchy-pkgs
+  # asked.
   # Ends any window and removes awdl0 before suspend or hibernate (#67).
   install -Dm755 "${startdir}/packaging/omdrop-awdl-sleep" \
     "${pkgdir}/usr/lib/systemd/system-sleep/omdrop-awdl"

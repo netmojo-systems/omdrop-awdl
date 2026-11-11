@@ -34,17 +34,19 @@ sudo modprobe -r brcmfmac_wcc brcmfmac brcmutil
 sudo modprobe brcmfmac
 ```
 
-The package also enables a boot-time warm-up, `awdl-warmup.service`, so the first AirDrop window after each boot opens in seconds. It takes effect from the next boot.
+An optional boot-time warm-up, `awdl-warmup.service`, makes the first AirDrop window after each boot open in seconds. The package doesn't enable it, because it turns AWDL on at boot:
+
+```bash
+sudo systemctl enable awdl-warmup.service
+```
+
+It takes effect from the next boot. Versions 0.10.4 to 0.10.6 enabled it by default; upgrading to 0.10.7 turns it off unless you enable it as above.
 
 Without it, the first window after a boot takes about a minute: the first AWDL session on a new `awdl0` doesn't transmit until AWDL has been switched off and on, and omdrop's transmit check spends that minute finding out. The warm-up creates `awdl0` and runs that check at boot, in the background, then leaves AWDL enabled. Its probe frames carry no AirDrop records, so it announces no service and no host name: you aren't discoverable until a window opens.
 
-To turn it off:
+To turn it off again, run `sudo systemctl disable awdl-warmup.service`.
 
-```bash
-sudo systemctl mask awdl-warmup.service
-```
-
-To create `awdl0` at boot without the warm-up, mask it as above and run `sudo systemctl enable awdl0.service`. If you enabled `awdl0.service` before the warm-up existed, you can leave it enabled: the two don't interfere.
+To create `awdl0` at boot without the warm-up, run `sudo systemctl enable awdl0.service` instead. The two don't interfere if both are enabled.
 
 Before the machine suspends or hibernates, a sleep hook ends any open window, turns AWDL off and removes `awdl0`: the firmware refuses to remove it while AWDL is on. Until it resumes, `awdl-up` creates no `awdl0`. That covers a warm-up, `awdl0.service` or a window's start that is still running, and the hook waits for a create already in flight to land and then removes it. On one MacBook Air M2, the only s2idle resume in twenty that left Wi-Fi unable to associate until a reboot was the one with `awdl0` present ([#67](https://github.com/netmojo-systems/omdrop-awdl/issues/67)). Nothing recreates `awdl0` on resume, so the first window after a resume rebuilds it: measured at 20 s to about 2 minutes, depending on how many AWDL off/on attempts the transmit check needs. The cleanup is best-effort: a hook that can't finish in time logs why and lets the machine sleep, and an interface the driver registers late can still slip past it ([#70](https://github.com/netmojo-systems/omdrop-awdl/issues/70)).
 
@@ -70,8 +72,8 @@ On a kernel whose own `brcmfmac` already has this AWDL support, DKMS skips the b
 | `/usr/lib/omdrop/awdl-resolve` | Reads a peer's advertised AirDrop service from its action frames |
 | `/usr/lib/omdrop/*.py` | Helpers for the tools above |
 | `/usr/share/polkit-1/actions/org.omarchy.omdrop.policy` | Lets a local desktop session run `omdrop-discoverable` without a password |
-| `/usr/lib/omdrop/awdl-warmup` | Creates `awdl0` and proves it transmits once; run at boot by `awdl-warmup.service` |
-| `/usr/lib/systemd/system/awdl-warmup.service` | Boot-time `awdl0` setup and warm-up; enabled by the install |
+| `/usr/lib/omdrop/awdl-warmup` | Creates `awdl0` and proves it transmits once; run at boot by `awdl-warmup.service` once enabled |
+| `/usr/lib/systemd/system/awdl-warmup.service` | Boot-time `awdl0` setup and warm-up; not enabled by the install |
 | `/usr/lib/systemd/system/awdl0.service` | Boot-time `awdl0` setup without the warm-up; not enabled by the install |
 | `/usr/lib/systemd/system-sleep/omdrop-awdl` | Before suspend or hibernate, ends any window and removes `awdl0` |
 | `/usr/lib/modprobe.d/brcmfmac-awdl.conf` | `debug=0x1000`, the firmware-interface bit of the debug mask; the data-path check doesn't depend on it |
