@@ -98,11 +98,19 @@ apply_schedule(){
 import struct
 b=bytearray(36); struct.pack_into('<BHBHBBHHHHHH',b,0,0,36,0,0,$MCH,0,16,110,0x1000,16,16,0)
 b[20:24]=bytes([3,3,3,3]); b[30]=4; print(bytes(b).hex())")
-  iovar_set "$IF" awdl 00000000
-  iovar_set "$IF" awdl_chan_seq "$SEQ"      && log "chan_seq set ($SHAPE, peer $PCH, master $MCH)"
-  iovar_set "$IF" awdl_sync_params "$SYNC"  && log "sync_params set"
-  iovar_set "$IF" awdl_extcounts 03030303
-  iovar_set "$IF" awdl_presencemode 04000000
+  local name value
+  # Each write is required: one that fails leaves the firmware on a partial schedule.
+  for name in awdl awdl_chan_seq awdl_sync_params awdl_extcounts awdl_presencemode; do
+    case $name in
+      awdl) value=00000000 ;;
+      awdl_chan_seq) value=$SEQ ;;
+      awdl_sync_params) value=$SYNC ;;
+      awdl_extcounts) value=03030303 ;;
+      awdl_presencemode) value=04000000 ;;
+    esac
+    iovar_set "$IF" "$name" "$value" || { log "$name could not be set; the schedule is incomplete"; return 1; }
+  done
+  log "schedule set ($SHAPE, peer $PCH, master $MCH)"
 }
 # The Wi-Fi interface's current channel as a number, or nothing.
 infra_channel(){
@@ -133,7 +141,11 @@ reconfigure_or_skip(){
     log "a PSF template is loaded; not rewriting the schedule -- reload the driver to reconfigure"
     return 0
   fi
-  apply_schedule && log "schedule re-applied to the existing $IF"
+  if apply_schedule; then
+    log "schedule re-applied to the existing $IF"
+  else
+    log "schedule NOT re-applied to the existing $IF; reload the driver to start from a clean firmware"
+  fi
 }
 
 # What the radio is allowed to do after a reload, reported rather than changed.

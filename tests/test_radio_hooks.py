@@ -690,13 +690,16 @@ touch "$sys/brcmutil/holders/brcmfmac"
 '''
 
 
-# brcm_iovar.py as awdl-up runs it (python3 PATH): records each call, and makes awdl0 on a create.
+# brcm_iovar.py as awdl-up runs it (python3 PATH): records each call, makes awdl0 on a create,
+# and fails a SET of the iovar named in $FAIL_SET.
 RECORD_IOVAR = r'''import os, sys
 stub = os.environ["STUB"]
 with open(os.path.join(stub, "iovar.log"), "a") as log:
     log.write("iovar " + " ".join(sys.argv[1:]) + "\n")
 if sys.argv[-2:] == ["awdl-if", "create"]:
     open(os.path.join(stub, "awdl0.up"), "w").close()
+if "set" in sys.argv and os.environ.get("FAIL_SET") in sys.argv:
+    sys.exit(1)
 '''
 
 
@@ -735,11 +738,11 @@ class ReloadTests(unittest.TestCase):
                 (self.sys / mod / "holders" / holder).touch()
         (self.sys / "brcmutil" / "stock").touch()
 
-    def reload(self, *args):
+    def reload(self, *args, **extra_env):
         env = dict(os.environ, STUB=str(self.stub), PATH=f"{self.bin}:{os.environ['PATH']}",
                    OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub", AWDL_WAIT_STA="0",
                    AWDL_WAIT_CHAN="0", AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"),
-                   AWDL_CREATE_LOCK=str(self.stub / "create.lock"))
+                   AWDL_CREATE_LOCK=str(self.stub / "create.lock"), **extra_env)
         return subprocess.run([str(self.awdl_up), *(args or ("--reload",))], capture_output=True,
                               text=True, env=env, timeout=10, cwd="/")
 
@@ -838,10 +841,7 @@ printf '%s\\n' "${{answers[$n]}}"
 
     def test_a_channel_change_while_awdl0_is_created_removes_it_unconfigured(self):
         self.stub.mkdir(parents=True, exist_ok=True)
-        # awdl0 appears once created; every iovar call is recorded.
-        executable(self.bin / "ip", '#!/usr/bin/env bash\n'
-                   '[[ " $* " == *" awdl0 "* ]] && { [[ -e $STUB/awdl0.up ]]; exit; }\nexit 0\n')
-        executable(self.root / "brcm_iovar.py", RECORD_IOVAR)
+        self.awdl0_appears_on_create()
         # 44 while waiting and at the check before the create; 153 by the time the schedule is written.
         self.wifi_reports("\tchannel 44 (5220 MHz)", "\tchannel 44 (5220 MHz)", "\tchannel 153 (5765 MHz)")
         result = self.reload("create")
@@ -851,6 +851,22 @@ printf '%s\\n' "${{answers[$n]}}"
         self.assertIn("awdl-if create", calls)
         self.assertIn("awdl-if destroy", calls)
         self.assertNotIn("awdl_chan_seq", calls)
+
+    def test_a_schedule_write_that_fails_removes_awdl0_however_the_rest_goes(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.awdl0_appears_on_create()
+        result = self.reload("create", FAIL_SET="awdl_chan_seq")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("awdl_chan_seq could not be set", result.stdout)
+        self.assertNotIn("ready:", result.stdout)
+        calls = (self.stub / "iovar.log").read_text()
+        self.assertIn("awdl-if destroy", calls)
+        self.assertNotIn("awdl_sync_params", calls)
+
+    def awdl0_appears_on_create(self):
+        executable(self.bin / "ip", '#!/usr/bin/env bash\n'
+                   '[[ " $* " == *" awdl0 "* ]] && { [[ -e $STUB/awdl0.up ]]; exit; }\nexit 0\n')
+        executable(self.root / "brcm_iovar.py", RECORD_IOVAR)
 
 
 class ProbeTests(unittest.TestCase):
