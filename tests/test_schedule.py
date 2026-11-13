@@ -1,5 +1,4 @@
 """The firmware's channel sequence and the one we advertise come from one table."""
-import importlib
 import os
 import subprocess
 import sys
@@ -12,14 +11,13 @@ sys.path.insert(0, str(USERSPACE))
 import awdl_schedule  # noqa: E402
 
 
-def mkpsf_with(conf):
-    """mkpsf.py imported against a knob directory, on an interface every host has."""
-    os.environ.update(OMDROP_CONF=conf, OMDROP_AWDL_IFACE='lo', OMDROP_INFRA_IFACE='lo',
-                      OMDROP_AWDL_HOST='test-host')
-    import awdl_identity
-    importlib.reload(awdl_identity)
-    import mkpsf
-    return importlib.reload(mkpsf)
+def advertised(conf):
+    """mkpsf.chanseq() for a knob directory, from a child process on an interface every host has."""
+    env = dict(os.environ, OMDROP_CONF=conf, OMDROP_AWDL_IFACE='lo', OMDROP_INFRA_IFACE='lo',
+               OMDROP_AWDL_HOST='test-host', PYTHONPATH=str(USERSPACE))
+    out = subprocess.run([sys.executable, '-c', 'import mkpsf; print(mkpsf.chanseq().hex())'],
+                         capture_output=True, text=True, env=env, check=True)
+    return bytes.fromhex(out.stdout.strip())
 
 
 def channels(seq):
@@ -53,9 +51,8 @@ class Schedule(unittest.TestCase):
                 with self.subTest(shape=shape, peer=peer), tempfile.TemporaryDirectory() as conf:
                     for name, value in (('peer-chan', peer), ('master-chan', 6), ('chan-shape', shape)):
                         Path(conf, name).write_text(f'{value}\n')
-                    mkpsf = mkpsf_with(conf)
                     fw = awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(peer, 6, shape))
-                    self.assertEqual(channels(mkpsf.chanseq()), channels(fw))
+                    self.assertEqual(channels(advertised(conf)), channels(fw))
 
     def test_mirror_is_known_and_keeps_the_wifi_channel(self):
         self.assertEqual(awdl_schedule.slots_for(44, 6, 'mirror'),

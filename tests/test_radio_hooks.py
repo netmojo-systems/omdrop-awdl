@@ -690,6 +690,16 @@ touch "$sys/brcmutil/holders/brcmfmac"
 '''
 
 
+# brcm_iovar.py as awdl-up runs it (python3 PATH): records each call, and makes awdl0 on a create.
+RECORD_IOVAR = r'''import os, sys
+stub = os.environ["STUB"]
+with open(os.path.join(stub, "iovar.log"), "a") as log:
+    log.write("iovar " + " ".join(sys.argv[1:]) + "\n")
+if sys.argv[-2:] == ["awdl-if", "create"]:
+    open(os.path.join(stub, "awdl0.up"), "w").close()
+'''
+
+
 class ReloadTests(unittest.TestCase):
     """`awdl-up --reload` swaps in the patched driver without a reboot."""
 
@@ -746,7 +756,13 @@ printf '%s\\n' "${{answers[$n]}}"
     def wifi_up_without_awdl0(self):
         """The Wi-Fi interface exists on its permanent MAC and awdl0 does not; record any create."""
         executable(self.bin / "ip", '#!/usr/bin/env bash\n[[ " $* " == *" awdl0 "* ]] && exit 1\nexit 0\n')
-        executable(self.root / "brcm_iovar.py", '#!/usr/bin/env bash\necho "iovar $*" >> "$STUB/iovar.log"\n')
+        executable(self.root / "brcm_iovar.py", RECORD_IOVAR)
+
+    def radio_changes(self):
+        """The recorded iovar calls that create an interface or SET anything; GETs are reads."""
+        log = self.stub / "iovar.log"
+        calls = log.read_text().splitlines() if log.exists() else []
+        return [c for c in calls if " awdl-if " in f"{c} " or " set " in f"{c} "]
 
     def test_the_stock_brcmutil_is_replaced_with_the_driver(self):
         result = self.reload()
@@ -806,7 +822,7 @@ printf '%s\\n' "${{answers[$n]}}"
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("brcmfmac reloaded", result.stdout)
         self.assertIn("never visits the Wi-Fi channel 153", result.stdout)
-        self.assertFalse((self.stub / "iovar.log").exists())
+        self.assertEqual(self.radio_changes(), [])
 
     def test_a_fresh_create_with_an_unsafe_schedule_writes_nothing(self):
         self.stub.mkdir(parents=True, exist_ok=True)
@@ -817,8 +833,24 @@ printf '%s\\n' "${{answers[$n]}}"
         result = self.reload("create")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("never visits the Wi-Fi channel 44", result.stdout)
-        self.assertFalse((self.stub / "iovar.log").exists())
+        self.assertEqual(self.radio_changes(), [])
         self.assertFalse((self.stub / "modprobe.log").exists())
+
+    def test_a_channel_change_while_awdl0_is_created_removes_it_unconfigured(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        # awdl0 appears once created; every iovar call is recorded.
+        executable(self.bin / "ip", '#!/usr/bin/env bash\n'
+                   '[[ " $* " == *" awdl0 "* ]] && { [[ -e $STUB/awdl0.up ]]; exit; }\nexit 0\n')
+        executable(self.root / "brcm_iovar.py", RECORD_IOVAR)
+        # 44 while waiting and at the check before the create; 153 by the time the schedule is written.
+        self.wifi_reports("\tchannel 44 (5220 MHz)", "\tchannel 44 (5220 MHz)", "\tchannel 153 (5765 MHz)")
+        result = self.reload("create")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("never visits the Wi-Fi channel 153", result.stdout)
+        calls = (self.stub / "iovar.log").read_text()
+        self.assertIn("awdl-if create", calls)
+        self.assertIn("awdl-if destroy", calls)
+        self.assertNotIn("awdl_chan_seq", calls)
 
 
 class ProbeTests(unittest.TestCase):
