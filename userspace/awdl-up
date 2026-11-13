@@ -36,6 +36,7 @@ NMCONF_VENDOR=/usr/lib/NetworkManager/conf.d/99-awdl-unmanaged.conf
 NMCONF=/etc/NetworkManager/conf.d/99-awdl-unmanaged.conf
 WAIT_STA=${AWDL_WAIT_STA:-60}          # seconds to wait for the infra interface
 WAIT_MAC=${AWDL_WAIT_MAC:-90}          # seconds to wait for it to stop randomising
+WAIT_CHAN=${AWDL_WAIT_CHAN:-20}        # seconds to wait for it to report a channel; the three waits fit awdl0.service's 180 s
 SYSMOD=/sys/module
 
 # The Wi-Fi interface is found, not assumed. It is wlan0 on a stock Arch
@@ -101,12 +102,22 @@ b[20:24]=bytes([3,3,3,3]); b[30]=4; print(bytes(b).hex())")
   iovar_set "$IF" awdl_extcounts 03030303
   iovar_set "$IF" awdl_presencemode 04000000
 }
-# Refuse a schedule that is unknown or never visits the Wi-Fi channel, while the link still works.
+# The Wi-Fi interface's current channel as a number, or nothing.
+infra_channel(){
+  local sta=${STA:-$(find_sta)}
+  [[ -n $sta ]] || return 0
+  iw dev "$sta" info 2>/dev/null | awk '$1 == "channel" && $2 ~ /^[0-9]+$/ { print $2; exit }'
+}
+# Refuse a schedule that is unknown or never visits the Wi-Fi channel; with no
+# channel to check against, refuse too, since a wrong one drops the association.
 schedule_ok(){
-  local sta=${STA:-$(find_sta)} infra=
-  [[ -n $sta ]] && infra=$(iw dev "$sta" info 2>/dev/null | awk '$1=="channel"{print $2; exit}')
-  local why
-  why=$(python3 "$LIB/awdl_schedule.py" check "$PCH" "$MCH" "$SHAPE" "$infra" 2>&1) && return 0
+  local ch why
+  ch=$(infra_channel)
+  if [[ ! $ch =~ ^[0-9]+$ ]]; then
+    log "schedule refused: the Wi-Fi interface reports no current channel to check the sequence against"
+    return 1
+  fi
+  why=$(python3 "$LIB/awdl_schedule.py" check "$PCH" "$MCH" "$SHAPE" "$ch" 2>&1) && return 0
   log "schedule refused: $why"
   return 1
 }
@@ -306,6 +317,13 @@ if ! wait_permaddr; then
   log "$STA still on a randomised MAC after ${WAIT_MAC}s ($(ip -br link show "$STA")); refusing to derive an AWDL address from it"
   exit 5
 fi
+# After a reload or at boot the link may come back on another channel, so check
+# the schedule against the channel it is on now, before anything is created.
+waited=0
+while [[ ! $(infra_channel) =~ ^[0-9]+$ ]] && (( waited < WAIT_CHAN )); do
+  sleep 1; waited=$(( waited + 1 ))
+done
+schedule_ok || { log "not creating $IF; Wi-Fi is left as it is"; exit 2; }
 
 log "creating $IF from $STA"
 # The create lock covers the create request and the wait for its interface.

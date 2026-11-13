@@ -296,6 +296,10 @@ class AwdlUpWhileSleepingTests(Harness):
     def setUp(self):
         super().setUp()
         shutil.copy2(AWDL_UP, self.lib / "awdl-up")
+        shutil.copy2(AWDL_UP.parent / "awdl_schedule.py", self.lib / "awdl_schedule.py")
+        # The Wi-Fi interface is associated on channel 44, which the default sequence visits.
+        bin_ = Path(self.env["PATH"].split(":")[0])
+        executable(bin_ / "iw", "#!/usr/bin/env bash\necho '\tchannel 44 (5220 MHz)'\n")
         self.env.update(AWDL_STA="wlan0", AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"),
                         OMDROP_CONF=str(self.stub / "conf"))
 

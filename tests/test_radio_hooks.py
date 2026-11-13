@@ -624,6 +624,8 @@ class ProcessGroupTests(HookHarness):
             awdl_up = awdl_up.replace(old, new)
         executable(self.lib / "awdl-up", awdl_up)
         executable(self.lib / "brcm_iovar.py", CREATE_SLOWLY)
+        shutil.copy(USERSPACE / "awdl_schedule.py", self.lib / "awdl_schedule.py")
+        executable(self.bin / "iw", "#!/usr/bin/env bash\necho '\tchannel 44 (5220 MHz)'\n")
         (self.stub / "driver").touch()
         env = dict(os.environ, STUB=str(self.stub), PATH=f"{self.bin}:{os.environ['PATH']}",
                    OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub",
@@ -723,12 +725,28 @@ class ReloadTests(unittest.TestCase):
                 (self.sys / mod / "holders" / holder).touch()
         (self.sys / "brcmutil" / "stock").touch()
 
-    def reload(self):
+    def reload(self, *args):
         env = dict(os.environ, STUB=str(self.stub), PATH=f"{self.bin}:{os.environ['PATH']}",
                    OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub", AWDL_WAIT_STA="0",
-                   AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"))
-        return subprocess.run([str(self.awdl_up), "--reload"], capture_output=True, text=True,
-                              env=env, timeout=10, cwd="/")
+                   AWDL_WAIT_CHAN="0", AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"),
+                   AWDL_CREATE_LOCK=str(self.stub / "create.lock"))
+        return subprocess.run([str(self.awdl_up), *(args or ("--reload",))], capture_output=True,
+                              text=True, env=env, timeout=10, cwd="/")
+
+    def wifi_reports(self, *channels):
+        """`iw` answers with these channel lines in turn, repeating the last."""
+        script = "\n".join(f"'{c}'" for c in channels)
+        executable(self.bin / "iw", f"""#!/usr/bin/env bash
+answers=({script})
+n=$(cat "$STUB/iw.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$STUB/iw.n"
+(( n < ${{#answers[@]}} )) || n=$((${{#answers[@]}} - 1))
+printf '%s\\n' "${{answers[$n]}}"
+""")
+
+    def wifi_up_without_awdl0(self):
+        """The Wi-Fi interface exists on its permanent MAC and awdl0 does not; record any create."""
+        executable(self.bin / "ip", '#!/usr/bin/env bash\n[[ " $* " == *" awdl0 "* ]] && exit 1\nexit 0\n')
+        executable(self.root / "brcm_iovar.py", '#!/usr/bin/env bash\necho "iovar $*" >> "$STUB/iovar.log"\n')
 
     def test_the_stock_brcmutil_is_replaced_with_the_driver(self):
         result = self.reload()
@@ -769,6 +787,38 @@ class ReloadTests(unittest.TestCase):
         self.assertIn("never visits the Wi-Fi channel 44", result.stdout)
         self.assertFalse((self.stub / "modprobe.log").exists())
         self.assertTrue((self.sys / "brcmutil" / "stock").exists())
+
+    def test_a_reload_with_no_readable_wifi_channel_stops_before_the_unload(self):
+        for answer in ("", "\tchannel abc"):
+            with self.subTest(answer=answer):
+                self.wifi_reports(answer)
+                result = self.reload()
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("reports no current channel", result.stdout)
+                self.assertFalse((self.stub / "modprobe.log").exists())
+
+    def test_wifi_back_on_a_channel_the_sequence_never_visits_creates_no_awdl0(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.wifi_up_without_awdl0()
+        # Checked on 44 before the unload; the link comes back on 153.
+        self.wifi_reports("\tchannel 44 (5220 MHz)", "\tchannel 153 (5765 MHz)")
+        result = self.reload()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("brcmfmac reloaded", result.stdout)
+        self.assertIn("never visits the Wi-Fi channel 153", result.stdout)
+        self.assertFalse((self.stub / "iovar.log").exists())
+
+    def test_a_fresh_create_with_an_unsafe_schedule_writes_nothing(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.wifi_up_without_awdl0()
+        conf = self.root / "conf"
+        conf.mkdir()
+        (conf / "peer-chan").write_text("149\n")
+        result = self.reload("create")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("never visits the Wi-Fi channel 44", result.stdout)
+        self.assertFalse((self.stub / "iovar.log").exists())
+        self.assertFalse((self.stub / "modprobe.log").exists())
 
 
 class ProbeTests(unittest.TestCase):
