@@ -703,6 +703,8 @@ class ReloadTests(unittest.TestCase):
         executable(self.bin / "sleep", "#!/usr/bin/env bash\nexit 0\n")
         # No Wi-Fi interface ever appears, so a successful load ends at exit 4.
         executable(self.bin / "ip", "#!/usr/bin/env bash\nexit 1\n")
+        # The Wi-Fi interface is associated on channel 44.
+        executable(self.bin / "iw", "#!/usr/bin/env bash\necho '\tchannel 44 (5220 MHz), width: 80 MHz'\n")
         awdl_up = (USERSPACE / "awdl-up").read_text()
         for old, new in (("[[ $EUID -eq 0 ]]", "true"),
                          ("NMCONF_VENDOR=/usr/lib/NetworkManager/conf.d/", f"NMCONF_VENDOR={self.stub}/vendor-"),
@@ -712,6 +714,7 @@ class ReloadTests(unittest.TestCase):
             awdl_up = awdl_up.replace(old, new)
         self.awdl_up = self.root / "awdl-up"
         executable(self.awdl_up, awdl_up)
+        shutil.copy(USERSPACE / "awdl_schedule.py", self.root / "awdl_schedule.py")
         # The stock modules a boot loaded, before the DKMS ones were installed.
         for mod, holders in (("brcmutil", ["brcmfmac"]), ("brcmfmac", ["brcmfmac_wcc"]),
                              ("brcmfmac_wcc", [])):
@@ -757,6 +760,15 @@ class ReloadTests(unittest.TestCase):
         self.assertFalse((self.stub / "modprobe.log").exists())
         self.assertTrue((self.sys / "brcmfmac").is_dir())
 
+    def test_a_schedule_that_never_visits_the_wifi_channel_stops_the_reload_before_the_unload(self):
+        conf = self.root / "conf"
+        conf.mkdir()
+        (conf / "peer-chan").write_text("149\n")
+        result = self.reload()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("never visits the Wi-Fi channel 44", result.stdout)
+        self.assertFalse((self.stub / "modprobe.log").exists())
+        self.assertTrue((self.sys / "brcmutil" / "stock").exists())
 
 
 class ProbeTests(unittest.TestCase):

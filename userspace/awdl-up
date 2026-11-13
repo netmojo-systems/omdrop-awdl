@@ -89,15 +89,8 @@ template_loaded(){ [[ $(iovar_bytes awdl_payload 512) -gt 0 ]]; }
 # re-apply path so the two can never drift.
 apply_schedule(){
   local SEQ SYNC
-  SEQ=$(python3 -c "
-import sys
-peer, mch, shape = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
-slots={'sparse':[peer,0,149,0,0,0,0,0,mch,0,149,0,0,0,0,0],
-       'dense': [peer,peer,149,0,0,0,0,peer,mch,peer,149,peer,0,0,0,peer],
-       'full':  [peer,peer,149,peer,peer,149,peer,peer,mch,peer,149,peer,peer,149,peer,peer],
-       'dense44':[peer,peer,149,peer,peer,peer,peer,peer,mch,peer,149,peer,peer,peer,peer,peer]}[shape]
-oc={0:0,1:81,6:81,11:81,36:128,40:128,44:128,48:128,149:128,153:128,157:128,161:128}
-print((bytes([15,3,0,3])+(0xffff).to_bytes(2,'little')+b''.join(bytes([c,oc[c]]) for c in slots)).hex())" "$PCH" "$MCH" "$SHAPE")
+  SEQ=$(python3 "$LIB/awdl_schedule.py" firmware "$PCH" "$MCH" "$SHAPE") \
+    || { log "chan_seq not written: the schedule ($SHAPE, peer $PCH, master $MCH) is invalid"; return 1; }
   SYNC=$(python3 -c "
 import struct
 b=bytearray(36); struct.pack_into('<BHBHBBHHHHHH',b,0,0,36,0,0,$MCH,0,16,110,0x1000,16,16,0)
@@ -107,6 +100,15 @@ b[20:24]=bytes([3,3,3,3]); b[30]=4; print(bytes(b).hex())")
   iovar_set "$IF" awdl_sync_params "$SYNC"  && log "sync_params set"
   iovar_set "$IF" awdl_extcounts 03030303
   iovar_set "$IF" awdl_presencemode 04000000
+}
+# Refuse a schedule that is unknown or never visits the Wi-Fi channel, while the link still works.
+schedule_ok(){
+  local sta=${STA:-$(find_sta)} infra=
+  [[ -n $sta ]] && infra=$(iw dev "$sta" info 2>/dev/null | awk '$1=="channel"{print $2; exit}')
+  local why
+  why=$(python3 "$LIB/awdl_schedule.py" check "$PCH" "$MCH" "$SHAPE" "$infra" 2>&1) && return 0
+  log "schedule refused: $why"
+  return 1
 }
 # Re-apply the channel schedule to an interface that already exists, when doing
 # so is safe. Skipping is normal and must never fail the unit.
@@ -118,8 +120,8 @@ reconfigure_or_skip(){
     log "a PSF template is loaded; not rewriting the schedule -- reload the driver to reconfigure"
     return 0
   fi
-  apply_schedule
-  log "schedule re-applied to the existing $IF"
+  schedule_ok || return 0
+  apply_schedule && log "schedule re-applied to the existing $IF"
 }
 
 # What the radio is allowed to do after a reload, reported rather than changed.
@@ -272,6 +274,7 @@ nm_release(){
 # 149 and 6 (600+ action frames, never 44) while we sat on a 44-dominant
 # sequence, transmitting where nobody listened.
 if (( RELOAD )); then
+  schedule_ok || exit 2
   reload_driver || exit $?
   # awdl0 died with the module; fall through to the create path below, which
   # waits for the permanent MAC and writes the schedule into fresh firmware.
