@@ -112,11 +112,18 @@ b[20:24]=bytes([3,3,3,3]); b[30]=4; print(bytes(b).hex())")
   done
   log "schedule set ($SHAPE, peer $PCH, master $MCH)"
 }
-# The Wi-Fi interface's current channel as a number, or nothing.
+# The Wi-Fi interface's channel as a number, or nothing until it is associated:
+# mid-association `iw dev info` reports whatever channel the scan is on.
 infra_channel(){
   local sta=${STA:-$(find_sta)}
   [[ -n $sta ]] || return 0
-  iw dev "$sta" info 2>/dev/null | awk '$1 == "channel" && $2 ~ /^[0-9]+$/ { print $2; exit }'
+  iw dev "$sta" link 2>/dev/null | awk '
+    /^Connected to / { up = 1 }
+    up && $1 == "freq:" { f = int($2)
+      if (f == 2484) print 14
+      else if (f >= 2412 && f <= 2472) print (f - 2407) / 5
+      else if (f > 5000 && f < 5925) print (f - 5000) / 5
+      exit }'
 }
 # Refuse a schedule that is unknown or never visits the Wi-Fi channel; with no
 # channel to check against, refuse too, since a wrong one drops the association.

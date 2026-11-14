@@ -126,6 +126,14 @@ def executable(path, text):
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def associated(mhz):
+    """`iw dev X link` for an interface associated on this frequency."""
+    return f"Connected to c6:4f:d5:41:10:72 (on wlstub)\n\tSSID: lab\n\tfreq: {mhz}.0"
+
+
+# `iw dev X link` mid-association; `iw dev X info` still names the scan's channel then.
+ASSOCIATING = "Not connected."
+
 class HookHarness(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -625,7 +633,7 @@ class ProcessGroupTests(HookHarness):
         executable(self.lib / "awdl-up", awdl_up)
         executable(self.lib / "brcm_iovar.py", CREATE_SLOWLY)
         shutil.copy(USERSPACE / "awdl_schedule.py", self.lib / "awdl_schedule.py")
-        executable(self.bin / "iw", "#!/usr/bin/env bash\necho '\tchannel 44 (5220 MHz)'\n")
+        executable(self.bin / "iw", f"#!/usr/bin/env bash\nprintf '%s\\n' '{associated(5220)}'\n")
         (self.stub / "driver").touch()
         env = dict(os.environ, STUB=str(self.stub), PATH=f"{self.bin}:{os.environ['PATH']}",
                    OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub",
@@ -719,7 +727,7 @@ class ReloadTests(unittest.TestCase):
         # No Wi-Fi interface ever appears, so a successful load ends at exit 4.
         executable(self.bin / "ip", "#!/usr/bin/env bash\nexit 1\n")
         # The Wi-Fi interface is associated on channel 44.
-        executable(self.bin / "iw", "#!/usr/bin/env bash\necho '\tchannel 44 (5220 MHz), width: 80 MHz'\n")
+        executable(self.bin / "iw", f"#!/usr/bin/env bash\nprintf '%s\\n' '{associated(5220)}'\n")
         awdl_up = (USERSPACE / "awdl-up").read_text()
         for old, new in (("[[ $EUID -eq 0 ]]", "true"),
                          ("NMCONF_VENDOR=/usr/lib/NetworkManager/conf.d/", f"NMCONF_VENDOR={self.stub}/vendor-"),
@@ -742,7 +750,8 @@ class ReloadTests(unittest.TestCase):
         env = dict(os.environ, STUB=str(self.stub), PATH=f"{self.bin}:{os.environ['PATH']}",
                    OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub", AWDL_WAIT_STA="0",
                    AWDL_WAIT_CHAN="0", AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"),
-                   AWDL_CREATE_LOCK=str(self.stub / "create.lock"), **extra_env)
+                   AWDL_CREATE_LOCK=str(self.stub / "create.lock"))
+        env.update(extra_env)
         return subprocess.run([str(self.awdl_up), *(args or ("--reload",))], capture_output=True,
                               text=True, env=env, timeout=10, cwd="/")
 
@@ -808,7 +817,7 @@ printf '%s\\n' "${{answers[$n]}}"
         self.assertTrue((self.sys / "brcmutil" / "stock").exists())
 
     def test_a_reload_with_no_readable_wifi_channel_stops_before_the_unload(self):
-        for answer in ("", "\tchannel abc"):
+        for answer in ("", "Connected to c6:4f:d5:41:10:72 (on wlstub)\n\tfreq: abc", ASSOCIATING):
             with self.subTest(answer=answer):
                 self.wifi_reports(answer)
                 result = self.reload()
@@ -820,7 +829,7 @@ printf '%s\\n' "${{answers[$n]}}"
         self.stub.mkdir(parents=True, exist_ok=True)
         self.wifi_up_without_awdl0()
         # Checked on 44 before the unload; the link comes back on 153.
-        self.wifi_reports("\tchannel 44 (5220 MHz)", "\tchannel 153 (5765 MHz)")
+        self.wifi_reports(associated(5220), associated(5765))
         result = self.reload()
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("brcmfmac reloaded", result.stdout)
@@ -843,7 +852,7 @@ printf '%s\\n' "${{answers[$n]}}"
         self.stub.mkdir(parents=True, exist_ok=True)
         self.awdl0_appears_on_create()
         # 44 while waiting and at the check before the create; 153 by the time the schedule is written.
-        self.wifi_reports("\tchannel 44 (5220 MHz)", "\tchannel 44 (5220 MHz)", "\tchannel 153 (5765 MHz)")
+        self.wifi_reports(associated(5220), associated(5220), associated(5765))
         result = self.reload("create")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("never visits the Wi-Fi channel 153", result.stdout)
@@ -851,6 +860,18 @@ printf '%s\\n' "${{answers[$n]}}"
         self.assertIn("awdl-if create", calls)
         self.assertIn("awdl-if destroy", calls)
         self.assertNotIn("awdl_chan_seq", calls)
+
+    def test_a_create_waits_for_the_association_not_the_scan_channel(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.awdl0_appears_on_create()
+        conf = self.root / "conf"
+        conf.mkdir()
+        (conf / "chan-shape").write_text("mirror\n")
+        # Associating, then up on 2.4 GHz channel 6, which `mirror` visits as the master channel.
+        self.wifi_reports(ASSOCIATING, ASSOCIATING, associated(2437))
+        result = self.reload("create", AWDL_WAIT_CHAN="5")
+        self.assertNotIn("schedule refused", result.stdout, result.stdout + result.stderr)
+        self.assertIn("schedule set (mirror", result.stdout)
 
     def test_a_schedule_write_that_fails_removes_awdl0_however_the_rest_goes(self):
         self.stub.mkdir(parents=True, exist_ok=True)
