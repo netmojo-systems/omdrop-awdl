@@ -27,12 +27,12 @@ OPCLASS = {0: 0, 1: 81, 6: 81, 11: 81, 36: 128, 40: 128, 44: 128, 48: 128,
 
 
 def band(ch):
-    """'2.4' or '5' for a channel this table can schedule; None for anything else, 6 GHz included."""
+    """'2.4' or '5' for a channel in this table, else None; awdl-up's frequency mapping keeps 6 GHz out."""
     return {81: '2.4', 128: '5'}.get(OPCLASS.get(ch))
 
 
 def default_master(infra):
-    """149 while the Wi-Fi is on 5 GHz, else 6: on 2.4 GHz only the Wi-Fi channel fits the master slot."""
+    """149 while the Wi-Fi is on a 5 GHz channel in this table, else 6 as before."""
     return 149 if band(infra) == '5' else 6
 
 
