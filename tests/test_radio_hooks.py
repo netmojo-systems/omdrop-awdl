@@ -156,6 +156,7 @@ class HookHarness(unittest.TestCase):
 RUN={self.run_dir}
 LOG=$RUN/log
 TRACE={self.stub}/awdl_trace
+SCHEDULE={self.stub}/schedule
 need_root(){{ :; }}
 driver_loaded(){{ [[ -e {self.stub}/driver ]]; }}
 ''')
@@ -168,6 +169,8 @@ driver_loaded(){{ [[ -e {self.stub}/driver ]]; }}
             executable(self.bin / name, text)
         # A PSF body, as mkpsf.py prints one; the template is not SET without it.
         (self.stub / "mkpsf.py.out").write_text("aabbccdd\n")
+        # The schedule awdl-up recorded for the existing awdl0; a window refuses one without it.
+        (self.stub / "schedule").write_text("44 6 mirror\n")
 
     def hook(self, name, *args, hooks=None, umask=None):
         env = dict(os.environ, STUB=str(self.stub),
@@ -368,6 +371,20 @@ class UpTests(HookHarness):
         self.assertEqual(result.returncode, 4, result.stderr)
         self.assertIn("nmcli general reload conf", self.log("nmcli.log"))
         self.assertIn("NetworkManager is managing it", result.stderr.splitlines()[-1])
+
+    def test_a_window_is_not_opened_on_an_awdl0_without_a_recorded_schedule(self):
+        for record in (None, "incomplete\n"):
+            with self.subTest(record=record):
+                self.interface()
+                (self.stub / "dmesg").write_text(TRANSMITTING)
+                (self.stub / "schedule").unlink(missing_ok=True)
+                if record:
+                    (self.stub / "schedule").write_text(record)
+                result = self.hook("up")
+                self.assertEqual(result.returncode, 4, result.stderr)
+                self.assertIn("needs restarting", result.stderr.splitlines()[-1])
+                self.assertNotIn("set awdl ", self.log("iovar.log"))
+                self.assertEqual(self.log("awdl-airdrop-adv.py.log"), "")
 
 
 class IdentityAndTickTests(HookHarness):
@@ -709,7 +726,9 @@ touch "$sys/brcmutil/holders/brcmfmac"
 
 
 # brcm_iovar.py as awdl-up runs it (python3 PATH): records each call, makes awdl0 on a create,
-# and fails a SET of the iovar named in $FAIL_SET.
+# fails a SET of the iovar named in $FAIL_SET, SIGKILLs awdl-up (its grandparent, under
+# timeout) at a SET of the iovar named in $KILL_SET, and at a SET of the iovar named in
+# $UNSTAGE_SET removes awdl-up's staged schedule record so that committing it fails.
 RECORD_IOVAR = r'''import os, sys
 stub = os.environ["STUB"]
 with open(os.path.join(stub, "iovar.log"), "a") as log:
@@ -718,6 +737,16 @@ if sys.argv[-2:] == ["awdl-if", "create"]:
     open(os.path.join(stub, "awdl0.up"), "w").close()
 if "set" in sys.argv and os.environ.get("FAIL_SET") in sys.argv:
     sys.exit(1)
+if "set" in sys.argv and os.environ.get("KILL_SET") in sys.argv:
+    import signal
+    awdl_up = int(open(f"/proc/{os.getppid()}/stat").read().rsplit(")", 1)[1].split()[1])
+    os.kill(awdl_up, signal.SIGKILL)
+    os.kill(os.getppid(), signal.SIGKILL)
+    sys.exit(1)
+if "set" in sys.argv and os.environ.get("UNSTAGE_SET") in sys.argv:
+    import glob
+    for staged in glob.glob(os.environ["AWDL_SCHEDULE_FILE"] + ".??????"):
+        os.remove(staged)
 '''
 
 
@@ -933,6 +962,32 @@ printf '%s\\n' "${{answers[$n]}}"
         (self.stub / "schedule").write_text("44 6 mirror\n")
         result = self.reload("create", FAIL_SET="awdl_sync_params")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assert_advertiser_refuses()
+
+    def test_awdl_up_killed_between_schedule_writes_leaves_a_record_the_advertiser_refuses(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.awdl0_appears_on_create()
+        (self.stub / "schedule").write_text("44 6 mirror\n")
+        self.wifi_reports(associated(5220))
+        result = self.reload("create", KILL_SET="awdl_sync_params")
+        self.assertEqual(result.returncode, -signal.SIGKILL, result.stdout + result.stderr)
+        self.assertIn("set awdl_chan_seq", (self.stub / "iovar.log").read_text())
+        self.assertEqual((self.stub / "schedule").read_text().strip(), "incomplete")
+        self.assert_advertiser_refuses()
+
+    def test_a_schedule_written_but_not_recorded_fails_and_stays_incomplete(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.awdl0_appears_on_create()
+        (self.stub / "schedule").write_text("44 6 mirror\n")
+        self.wifi_reports(associated(5220))
+        result = self.reload("create", UNSTAGE_SET="awdl_presencemode")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("set awdl_presencemode", (self.stub / "iovar.log").read_text())
+        self.assertNotIn("ready:", result.stdout)
+        self.assertEqual((self.stub / "schedule").read_text().strip(), "incomplete")
+        self.assert_advertiser_refuses()
+
+    def assert_advertiser_refuses(self):
         psf = subprocess.run([sys.executable, "-c", "import mkpsf; mkpsf.chanseq()"], capture_output=True, text=True,
                              env=dict(os.environ, AWDL_SCHEDULE_FILE=str(self.stub / "schedule"),
                                       OMDROP_CONF=str(self.root / "conf"), PYTHONPATH=str(USERSPACE)))

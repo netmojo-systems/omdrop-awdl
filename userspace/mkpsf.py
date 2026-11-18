@@ -56,13 +56,11 @@ def configured_slots():
     try:
         with open(os.environ.get('AWDL_SCHEDULE_FILE', '/run/awdl-up.schedule')) as f:
             record = f.read().split()
-    except FileNotFoundError:
-        # An awdl0 from a helper older than the record, which applied the knob files as they are read here.
-        return slots_for(int(ident.knob('peer-chan', '44')), int(ident.knob('master-chan', '6')),
-                         ident.knob('chan-shape', 'dense'))
+    except OSError as e:
+        record = [f'no record: {e.strerror}']
     if len(record) != 3 or not record[0].isdigit() or not record[1].isdigit() or record[2] not in SHAPES:
         raise SystemExit(f"mkpsf: the firmware's schedule is unknown ({' '.join(record) or 'empty record'}); "
-                         "reload the driver")
+                         "recreate awdl0 (Wi-Fi off and on) or reload the driver")
     return slots_for(int(record[0]), int(record[1]), record[2])
 
 def chanseq(enc=1, chans=None, infra=None):

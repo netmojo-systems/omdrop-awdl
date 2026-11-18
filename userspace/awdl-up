@@ -102,13 +102,15 @@ apply_schedule(){
 import struct
 b=bytearray(36); struct.pack_into('<BHBHBBHHHHHH',b,0,0,36,0,0,$MCH,0,16,110,0x1000,16,16,0)
 b[20:24]=bytes([3,3,3,3]); b[30]=4; print(bytes(b).hex())")
-  # Recorded before any write: a record that cannot be replaced must leave the firmware as it was.
-  local tmp
-  tmp=$(mktemp "$APPLIED.XXXXXX" 2>/dev/null) && chmod 644 "$tmp" \
-    && printf '%s %s %s\n' "$PCH" "$MCH" "$SHAPE" > "$tmp" && mv -f "$tmp" "$APPLIED" \
-    || { rm -f "$tmp"; log "schedule not written: it could not be recorded in $APPLIED"; return 1; }
-  local name value
-  # Each write is required: one that fails leaves the firmware on a partial schedule, which mkpsf.py then refuses.
+  # The record is staged now and committed only after every write; until then it reads incomplete,
+  # which mkpsf.py refuses, so a write that fails or is killed never leaves a schedule advertised.
+  local stage name value
+  rm -f -- "$APPLIED".??????
+  stage=$(mktemp "$APPLIED.XXXXXX" 2>/dev/null) && chmod 644 "$stage" \
+    && printf '%s %s %s\n' "$PCH" "$MCH" "$SHAPE" > "$stage" \
+    || { rm -f "$stage"; log "schedule not written: it could not be recorded in $APPLIED"; return 1; }
+  echo incomplete > "$APPLIED" \
+    || { rm -f "$stage"; log "schedule not written: $APPLIED could not be marked incomplete"; return 1; }
   for name in awdl awdl_chan_seq awdl_sync_params awdl_extcounts awdl_presencemode; do
     case $name in
       awdl) value=00000000 ;;
@@ -117,9 +119,11 @@ b[20:24]=bytes([3,3,3,3]); b[30]=4; print(bytes(b).hex())")
       awdl_extcounts) value=03030303 ;;
       awdl_presencemode) value=04000000 ;;
     esac
-    iovar_set "$IF" "$name" "$value" || { echo incomplete > "$APPLIED"
-      log "$name could not be set; the schedule is incomplete"; return 1; }
+    iovar_set "$IF" "$name" "$value" \
+      || { rm -f "$stage"; log "$name could not be set; the schedule is incomplete"; return 1; }
   done
+  mv -f "$stage" "$APPLIED" \
+    || { rm -f "$stage"; log "schedule set but not recorded in $APPLIED; it stays incomplete"; return 1; }
   log "schedule set ($SHAPE, peer $PCH, master $MCH)"
 }
 # The Wi-Fi interface's channel as a number, or nothing until it is associated:

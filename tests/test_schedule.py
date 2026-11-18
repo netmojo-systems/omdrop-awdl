@@ -12,7 +12,7 @@ import awdl_schedule  # noqa: E402
 
 
 def run_mkpsf(conf, **extra):
-    """mkpsf.chanseq() for a knob directory, from a child process on an interface every host has."""
+    """mkpsf.chanseq() with this configuration directory, from a child process on an interface every host has."""
     env = dict(os.environ, OMDROP_CONF=conf, OMDROP_AWDL_IFACE='lo', OMDROP_INFRA_IFACE='lo',
                OMDROP_AWDL_HOST='test-host', PYTHONPATH=str(USERSPACE),
                AWDL_SCHEDULE_FILE=str(Path(conf, 'no-record')))
@@ -57,10 +57,10 @@ class Schedule(unittest.TestCase):
         for shape in awdl_schedule.SHAPES:
             for peer in (44, 149):
                 with self.subTest(shape=shape, peer=peer), tempfile.TemporaryDirectory() as conf:
-                    for name, value in (('peer-chan', peer), ('master-chan', 6), ('chan-shape', shape)):
-                        Path(conf, name).write_text(f'{value}\n')
+                    record = Path(conf, 'schedule')
+                    record.write_text(f'{peer} 6 {shape}\n')
                     fw = awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(peer, 6, shape))
-                    self.assertEqual(channels(advertised(conf)), channels(fw))
+                    self.assertEqual(channels(advertised(conf, AWDL_SCHEDULE_FILE=str(record))), channels(fw))
 
     def test_mirror_is_known_and_keeps_the_wifi_channel(self):
         self.assertEqual(awdl_schedule.slots_for(44, 6, 'mirror'),
@@ -101,20 +101,18 @@ class Schedule(unittest.TestCase):
 
     def test_an_unknown_firmware_schedule_is_not_advertised(self):
         with tempfile.TemporaryDirectory() as conf:
+            for name, value in (('peer-chan', 44), ('master-chan', 6), ('chan-shape', 'mirror')):
+                Path(conf, name).write_text(f'{value}\n')
             record = Path(conf, 'schedule')
-            for text in ('incomplete\n', '', '44 149 nosuch\n'):
+            for text in (None, 'incomplete\n', '', '44 149 nosuch\n'):
                 with self.subTest(record=text):
-                    record.write_text(text)
+                    record.unlink(missing_ok=True)
+                    if text is not None:
+                        record.write_text(text)
                     out = run_mkpsf(conf, AWDL_SCHEDULE_FILE=str(record))
                     self.assertNotEqual(out.returncode, 0)
                     self.assertEqual(out.stdout, '')
                     self.assertIn('reload the driver', out.stderr)
-
-    def test_without_a_record_the_knobs_are_advertised_as_an_older_helper_applied_them(self):
-        with tempfile.TemporaryDirectory() as conf:
-            Path(conf, 'chan-shape').write_text('mirror\n')
-            fw = awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(44, 6, 'mirror'))
-            self.assertEqual(channels(advertised(conf)), channels(fw))
 
 
 if __name__ == '__main__':

@@ -20,6 +20,8 @@ export OMDROP_CONF="$CONF"
 IF=awdl0
 RUN=/run/awdl-discoverable
 LOG=$RUN/log
+# The schedule awdl-up gave the firmware, written by awdl-up and advertised by mkpsf.py.
+SCHEDULE=${AWDL_SCHEDULE_FILE:-/run/awdl-up.schedule}
 SUPERVISOR_UID=0
 # How many awdl=0/1 cycles to spend fighting a parked data path. Each costs
 # ~40 s. The park is ~50% per enable and streaky, so 3 is the point where the
@@ -607,6 +609,11 @@ radio_up(){
       die 4 "AirDrop's radio interface could not be started. Turning Wi-Fi off and back on usually clears this; a restart always does."
     fi
     die 4 "AirDrop's Wi-Fi driver is not loaded, so this machine cannot be discovered. Restart to load it."
+  fi
+  # Its schedule is advertised only as awdl-up recorded it; with none, it came from an older awdl-up or a cut-short write.
+  if [[ ! $(cat "$SCHEDULE" 2>/dev/null) =~ ^[0-9]+\ [0-9]+\ [a-z0-9]+$ ]]; then
+    set_reason no_awdl0
+    die 4 "AirDrop's radio interface needs restarting. Turn Wi-Fi off and back on, or restart."
   fi
   # An awdl0 that already exists skips awdl-up, so check NetworkManager here
   # too: installed on a running system, the package's unmanaged setting is not
