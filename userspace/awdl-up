@@ -36,6 +36,7 @@ NMCONF_VENDOR=/usr/lib/NetworkManager/conf.d/99-awdl-unmanaged.conf
 NMCONF=/etc/NetworkManager/conf.d/99-awdl-unmanaged.conf
 WAIT_STA=${AWDL_WAIT_STA:-60}          # seconds to wait for the infra interface
 WAIT_MAC=${AWDL_WAIT_MAC:-90}          # seconds to wait for it to stop randomising
+WAIT_CHAN=${AWDL_WAIT_CHAN:-20}        # seconds to wait for it to report a channel; the three waits fit awdl0.service's 180 s
 SYSMOD=/sys/module
 
 # The Wi-Fi interface is found, not assumed. It is wlan0 on a stock Arch
@@ -89,24 +90,53 @@ template_loaded(){ [[ $(iovar_bytes awdl_payload 512) -gt 0 ]]; }
 # re-apply path so the two can never drift.
 apply_schedule(){
   local SEQ SYNC
-  SEQ=$(python3 -c "
-import sys
-peer, mch, shape = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
-slots={'sparse':[peer,0,149,0,0,0,0,0,mch,0,149,0,0,0,0,0],
-       'dense': [peer,peer,149,0,0,0,0,peer,mch,peer,149,peer,0,0,0,peer],
-       'full':  [peer,peer,149,peer,peer,149,peer,peer,mch,peer,149,peer,peer,149,peer,peer],
-       'dense44':[peer,peer,149,peer,peer,peer,peer,peer,mch,peer,149,peer,peer,peer,peer,peer]}[shape]
-oc={0:0,1:81,6:81,11:81,36:128,40:128,44:128,48:128,149:128,153:128,157:128,161:128}
-print((bytes([15,3,0,3])+(0xffff).to_bytes(2,'little')+b''.join(bytes([c,oc[c]]) for c in slots)).hex())" "$PCH" "$MCH" "$SHAPE")
+  # Checked here, right before the writes, as the Wi-Fi channel can change while awdl0 is created.
+  schedule_ok || return 1
+  SEQ=$(python3 "$LIB/awdl_schedule.py" firmware "$PCH" "$MCH" "$SHAPE") \
+    || { log "chan_seq not written: the schedule ($SHAPE, peer $PCH, master $MCH) is invalid"; return 1; }
   SYNC=$(python3 -c "
 import struct
 b=bytearray(36); struct.pack_into('<BHBHBBHHHHHH',b,0,0,36,0,0,$MCH,0,16,110,0x1000,16,16,0)
 b[20:24]=bytes([3,3,3,3]); b[30]=4; print(bytes(b).hex())")
-  iovar_set "$IF" awdl 00000000
-  iovar_set "$IF" awdl_chan_seq "$SEQ"      && log "chan_seq set ($SHAPE, peer $PCH, master $MCH)"
-  iovar_set "$IF" awdl_sync_params "$SYNC"  && log "sync_params set"
-  iovar_set "$IF" awdl_extcounts 03030303
-  iovar_set "$IF" awdl_presencemode 04000000
+  local name value
+  # Each write is required: one that fails leaves the firmware on a partial schedule.
+  for name in awdl awdl_chan_seq awdl_sync_params awdl_extcounts awdl_presencemode; do
+    case $name in
+      awdl) value=00000000 ;;
+      awdl_chan_seq) value=$SEQ ;;
+      awdl_sync_params) value=$SYNC ;;
+      awdl_extcounts) value=03030303 ;;
+      awdl_presencemode) value=04000000 ;;
+    esac
+    iovar_set "$IF" "$name" "$value" || { log "$name could not be set; the schedule is incomplete"; return 1; }
+  done
+  log "schedule set ($SHAPE, peer $PCH, master $MCH)"
+}
+# The Wi-Fi interface's channel as a number, or nothing until it is associated:
+# mid-association `iw dev info` reports whatever channel the scan is on.
+infra_channel(){
+  local sta=${STA:-$(find_sta)}
+  [[ -n $sta ]] || return 0
+  iw dev "$sta" link 2>/dev/null | awk '
+    /^Connected to / { up = 1 }
+    up && $1 == "freq:" { f = int($2)
+      if (f == 2484) print 14
+      else if (f >= 2412 && f <= 2472) print (f - 2407) / 5
+      else if (f > 5000 && f < 5925) print (f - 5000) / 5
+      exit }'
+}
+# Refuse a schedule that is unknown or never visits the Wi-Fi channel; with no
+# channel to check against, refuse too, since a wrong one drops the association.
+schedule_ok(){
+  local ch why
+  ch=$(infra_channel)
+  if [[ ! $ch =~ ^[0-9]+$ ]]; then
+    log "schedule refused: the Wi-Fi interface reports no current channel to check the sequence against"
+    return 1
+  fi
+  why=$(python3 "$LIB/awdl_schedule.py" check "$PCH" "$MCH" "$SHAPE" "$ch" 2>&1) && return 0
+  log "schedule refused: $why"
+  return 1
 }
 # Re-apply the channel schedule to an interface that already exists, when doing
 # so is safe. Skipping is normal and must never fail the unit.
@@ -118,8 +148,11 @@ reconfigure_or_skip(){
     log "a PSF template is loaded; not rewriting the schedule -- reload the driver to reconfigure"
     return 0
   fi
-  apply_schedule
-  log "schedule re-applied to the existing $IF"
+  if apply_schedule; then
+    log "schedule re-applied to the existing $IF"
+  else
+    log "schedule NOT re-applied to the existing $IF; reload the driver to start from a clean firmware"
+  fi
 }
 
 # What the radio is allowed to do after a reload, reported rather than changed.
@@ -272,6 +305,7 @@ nm_release(){
 # 149 and 6 (600+ action frames, never 44) while we sat on a 44-dominant
 # sequence, transmitting where nobody listened.
 if (( RELOAD )); then
+  schedule_ok || exit 2
   reload_driver || exit $?
   # awdl0 died with the module; fall through to the create path below, which
   # waits for the permanent MAC and writes the schedule into fresh firmware.
@@ -303,6 +337,13 @@ if ! wait_permaddr; then
   log "$STA still on a randomised MAC after ${WAIT_MAC}s ($(ip -br link show "$STA")); refusing to derive an AWDL address from it"
   exit 5
 fi
+# After a reload or at boot the link may come back on another channel, so check
+# the schedule against the channel it is on now, before anything is created.
+waited=0
+while [[ ! $(infra_channel) =~ ^[0-9]+$ ]] && (( waited < WAIT_CHAN )); do
+  sleep 1; waited=$(( waited + 1 ))
+done
+schedule_ok || { log "not creating $IF; Wi-Fi is left as it is"; exit 2; }
 
 log "creating $IF from $STA"
 # The create lock covers the create request and the wait for its interface.
@@ -328,7 +369,12 @@ ip link show "$IF" >/dev/null 2>&1 || { log "awdl-if create did not produce $IF"
 exec 6>&-
 ip link set "$IF" up
 
-apply_schedule
+if ! apply_schedule; then
+  # An awdl0 left without our schedule would run the firmware's default one.
+  timeout --foreground 8 python3 "$LIB/brcm_iovar.py" -i "$IF" awdl-if destroy 2>&1 | sed 's/^/  /'
+  log "removed $IF; Wi-Fi is left as it is"
+  exit 2
+fi
 
 # "The patched module now loaded is this one." Anything deciding whether it has
 # to reload the driver before trusting the AWDL iovars reads this instead of

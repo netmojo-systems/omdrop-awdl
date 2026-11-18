@@ -47,22 +47,10 @@ def tlv(t, body): return bytes([t]) + struct.pack('<H', len(body)) + body
 # own infra channel (44) at slot 0, under strategy "Infra Priority".
 CHFLAGS = {6: 0x2b, 44: 0x1d, 149: 0x1d, 151: 0x1d, 0: 0x00}
 
-# The advertised sequence MUST be the one the firmware dwells on. It was
-# hardcoded to Apple's 44/149/6 shape while awdl-up wrote whatever the
-# peer-chan knob said, so a peer-channel change moved our dwell and left our
-# PSF pointing at the old windows -- and a Mac schedules its unicast into the
-# availability we advertise. Both now read the same three knob files, so they
-# cannot drift.
-def slots_for(peer, mch, shape):
-    return {'sparse': [peer, 0, 149, 0, 0, 0, 0, 0, mch, 0, 149, 0, 0, 0, 0, 0],
-            'dense': [peer, peer, 149, 0, 0, 0, 0, peer, mch, peer, 149, peer, 0, 0, 0, peer],
-            'full': [peer, peer, 149, peer, peer, 149, peer, peer, mch, peer, 149, peer, peer, 149, peer, peer],
-            'dense44': [peer, peer, 149, peer, peer, peer, peer, peer, mch, peer, 149, peer, peer, peer, peer, peer],
-            # A Mac's live shape observed on air (ten nonzero slots). Macs
-            # re-derive their sequence over time, so this is a moving target:
-            # re-read the peer's chan_seq before trusting it.
-            'mirror': [peer, 0, 149, 0, 0, 149, peer, peer, mch, 0, 149, 0, 0, 149, peer, peer],
-            }[shape]
+# The advertised sequence MUST be the one the firmware dwells on: a Mac
+# schedules its unicast into the availability we advertise. awdl-up writes the
+# firmware's from the same table and knob files, so they cannot drift.
+from awdl_schedule import slots_for
 
 def configured_slots():
     return slots_for(int(ident.knob('peer-chan', '44')),

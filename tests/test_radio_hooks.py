@@ -126,6 +126,14 @@ def executable(path, text):
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def associated(mhz):
+    """`iw dev X link` for an interface associated on this frequency."""
+    return f"Connected to c6:4f:d5:41:10:72 (on wlstub)\n\tSSID: lab\n\tfreq: {mhz}.0"
+
+
+# `iw dev X link` mid-association; `iw dev X info` still names the scan's channel then.
+ASSOCIATING = "Not connected."
+
 class HookHarness(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -624,6 +632,8 @@ class ProcessGroupTests(HookHarness):
             awdl_up = awdl_up.replace(old, new)
         executable(self.lib / "awdl-up", awdl_up)
         executable(self.lib / "brcm_iovar.py", CREATE_SLOWLY)
+        shutil.copy(USERSPACE / "awdl_schedule.py", self.lib / "awdl_schedule.py")
+        executable(self.bin / "iw", f"#!/usr/bin/env bash\nprintf '%s\\n' '{associated(5220)}'\n")
         (self.stub / "driver").touch()
         env = dict(os.environ, STUB=str(self.stub), PATH=f"{self.bin}:{os.environ['PATH']}",
                    OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub",
@@ -688,6 +698,19 @@ touch "$sys/brcmutil/holders/brcmfmac"
 '''
 
 
+# brcm_iovar.py as awdl-up runs it (python3 PATH): records each call, makes awdl0 on a create,
+# and fails a SET of the iovar named in $FAIL_SET.
+RECORD_IOVAR = r'''import os, sys
+stub = os.environ["STUB"]
+with open(os.path.join(stub, "iovar.log"), "a") as log:
+    log.write("iovar " + " ".join(sys.argv[1:]) + "\n")
+if sys.argv[-2:] == ["awdl-if", "create"]:
+    open(os.path.join(stub, "awdl0.up"), "w").close()
+if "set" in sys.argv and os.environ.get("FAIL_SET") in sys.argv:
+    sys.exit(1)
+'''
+
+
 class ReloadTests(unittest.TestCase):
     """`awdl-up --reload` swaps in the patched driver without a reboot."""
 
@@ -703,6 +726,8 @@ class ReloadTests(unittest.TestCase):
         executable(self.bin / "sleep", "#!/usr/bin/env bash\nexit 0\n")
         # No Wi-Fi interface ever appears, so a successful load ends at exit 4.
         executable(self.bin / "ip", "#!/usr/bin/env bash\nexit 1\n")
+        # The Wi-Fi interface is associated on channel 44.
+        executable(self.bin / "iw", f"#!/usr/bin/env bash\nprintf '%s\\n' '{associated(5220)}'\n")
         awdl_up = (USERSPACE / "awdl-up").read_text()
         for old, new in (("[[ $EUID -eq 0 ]]", "true"),
                          ("NMCONF_VENDOR=/usr/lib/NetworkManager/conf.d/", f"NMCONF_VENDOR={self.stub}/vendor-"),
@@ -712,6 +737,7 @@ class ReloadTests(unittest.TestCase):
             awdl_up = awdl_up.replace(old, new)
         self.awdl_up = self.root / "awdl-up"
         executable(self.awdl_up, awdl_up)
+        shutil.copy(USERSPACE / "awdl_schedule.py", self.root / "awdl_schedule.py")
         # The stock modules a boot loaded, before the DKMS ones were installed.
         for mod, holders in (("brcmutil", ["brcmfmac"]), ("brcmfmac", ["brcmfmac_wcc"]),
                              ("brcmfmac_wcc", [])):
@@ -720,12 +746,35 @@ class ReloadTests(unittest.TestCase):
                 (self.sys / mod / "holders" / holder).touch()
         (self.sys / "brcmutil" / "stock").touch()
 
-    def reload(self):
+    def reload(self, *args, **extra_env):
         env = dict(os.environ, STUB=str(self.stub), PATH=f"{self.bin}:{os.environ['PATH']}",
                    OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub", AWDL_WAIT_STA="0",
-                   AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"))
-        return subprocess.run([str(self.awdl_up), "--reload"], capture_output=True, text=True,
-                              env=env, timeout=10, cwd="/")
+                   AWDL_WAIT_CHAN="0", AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"),
+                   AWDL_CREATE_LOCK=str(self.stub / "create.lock"))
+        env.update(extra_env)
+        return subprocess.run([str(self.awdl_up), *(args or ("--reload",))], capture_output=True,
+                              text=True, env=env, timeout=10, cwd="/")
+
+    def wifi_reports(self, *channels):
+        """`iw` answers with these channel lines in turn, repeating the last."""
+        script = "\n".join(f"'{c}'" for c in channels)
+        executable(self.bin / "iw", f"""#!/usr/bin/env bash
+answers=({script})
+n=$(cat "$STUB/iw.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$STUB/iw.n"
+(( n < ${{#answers[@]}} )) || n=$((${{#answers[@]}} - 1))
+printf '%s\\n' "${{answers[$n]}}"
+""")
+
+    def wifi_up_without_awdl0(self):
+        """The Wi-Fi interface exists on its permanent MAC and awdl0 does not; record any create."""
+        executable(self.bin / "ip", '#!/usr/bin/env bash\n[[ " $* " == *" awdl0 "* ]] && exit 1\nexit 0\n')
+        executable(self.root / "brcm_iovar.py", RECORD_IOVAR)
+
+    def radio_changes(self):
+        """The recorded iovar calls that create an interface or SET anything; GETs are reads."""
+        log = self.stub / "iovar.log"
+        calls = log.read_text().splitlines() if log.exists() else []
+        return [c for c in calls if " awdl-if " in f"{c} " or " set " in f"{c} "]
 
     def test_the_stock_brcmutil_is_replaced_with_the_driver(self):
         result = self.reload()
@@ -757,6 +806,88 @@ class ReloadTests(unittest.TestCase):
         self.assertFalse((self.stub / "modprobe.log").exists())
         self.assertTrue((self.sys / "brcmfmac").is_dir())
 
+    def test_a_schedule_that_never_visits_the_wifi_channel_stops_the_reload_before_the_unload(self):
+        conf = self.root / "conf"
+        conf.mkdir()
+        (conf / "peer-chan").write_text("149\n")
+        result = self.reload()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("never visits the Wi-Fi channel 44", result.stdout)
+        self.assertFalse((self.stub / "modprobe.log").exists())
+        self.assertTrue((self.sys / "brcmutil" / "stock").exists())
+
+    def test_a_reload_with_no_readable_wifi_channel_stops_before_the_unload(self):
+        for answer in ("", "Connected to c6:4f:d5:41:10:72 (on wlstub)\n\tfreq: abc", ASSOCIATING):
+            with self.subTest(answer=answer):
+                self.wifi_reports(answer)
+                result = self.reload()
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("reports no current channel", result.stdout)
+                self.assertFalse((self.stub / "modprobe.log").exists())
+
+    def test_wifi_back_on_a_channel_the_sequence_never_visits_creates_no_awdl0(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.wifi_up_without_awdl0()
+        # Checked on 44 before the unload; the link comes back on 153.
+        self.wifi_reports(associated(5220), associated(5765))
+        result = self.reload()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("brcmfmac reloaded", result.stdout)
+        self.assertIn("never visits the Wi-Fi channel 153", result.stdout)
+        self.assertEqual(self.radio_changes(), [])
+
+    def test_a_fresh_create_with_an_unsafe_schedule_writes_nothing(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.wifi_up_without_awdl0()
+        conf = self.root / "conf"
+        conf.mkdir()
+        (conf / "peer-chan").write_text("149\n")
+        result = self.reload("create")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("never visits the Wi-Fi channel 44", result.stdout)
+        self.assertEqual(self.radio_changes(), [])
+        self.assertFalse((self.stub / "modprobe.log").exists())
+
+    def test_a_channel_change_while_awdl0_is_created_removes_it_unconfigured(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.awdl0_appears_on_create()
+        # 44 while waiting and at the check before the create; 153 by the time the schedule is written.
+        self.wifi_reports(associated(5220), associated(5220), associated(5765))
+        result = self.reload("create")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("never visits the Wi-Fi channel 153", result.stdout)
+        calls = (self.stub / "iovar.log").read_text()
+        self.assertIn("awdl-if create", calls)
+        self.assertIn("awdl-if destroy", calls)
+        self.assertNotIn("awdl_chan_seq", calls)
+
+    def test_a_create_waits_for_the_association_not_the_scan_channel(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.awdl0_appears_on_create()
+        conf = self.root / "conf"
+        conf.mkdir()
+        (conf / "chan-shape").write_text("mirror\n")
+        # Associating, then up on 2.4 GHz channel 6, which `mirror` visits as the master channel.
+        self.wifi_reports(ASSOCIATING, ASSOCIATING, associated(2437))
+        result = self.reload("create", AWDL_WAIT_CHAN="5")
+        self.assertNotIn("schedule refused", result.stdout, result.stdout + result.stderr)
+        self.assertIn("schedule set (mirror", result.stdout)
+
+    def test_a_schedule_write_that_fails_removes_awdl0_however_the_rest_goes(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.awdl0_appears_on_create()
+        result = self.reload("create", FAIL_SET="awdl_chan_seq")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("awdl_chan_seq could not be set", result.stdout)
+        self.assertNotIn("ready:", result.stdout)
+        calls = (self.stub / "iovar.log").read_text()
+        self.assertIn("awdl-if destroy", calls)
+        self.assertNotIn("awdl_sync_params", calls)
+
+    def awdl0_appears_on_create(self):
+        executable(self.bin / "ip", '#!/usr/bin/env bash\n'
+                   '[[ " $* " == *" awdl0 "* ]] && { [[ -e $STUB/awdl0.up ]]; exit; }\nexit 0\n')
+        executable(self.root / "brcm_iovar.py", RECORD_IOVAR)
 
 
 class ProbeTests(unittest.TestCase):

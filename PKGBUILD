@@ -28,7 +28,7 @@ license=('GPL-2.0-only')
 # DKMS hook has nothing to compile against and silently builds nothing, so the
 # stock brcmfmac stays loaded and awdl0 cannot be created
 # (netmojo-systems/omdrop-plugin#17).
-depends=('dkms' 'linux-asahi-headers' 'bash' 'python' 'iproute2' 'iputils'
+depends=('dkms' 'linux-asahi-headers' 'bash' 'python' 'iproute2' 'iputils' 'iw'
          'kmod' 'polkit' 'procps-ng' 'util-linux' 'systemd' 'keyutils'
          'python-libarchive-c' 'python-pillow' 'python-zeroconf' 'python-ifaddr')
 makedepends=()        # prepare() patches with patch(1), which base-devel has
@@ -131,6 +131,7 @@ package() {
   install -Dm644 "${startdir}/userspace/awdl_identity.py" "${lib}/awdl_identity.py"
   install -Dm644 "${startdir}/userspace/awdl_debug.py" "${lib}/awdl_debug.py"
   install -Dm644 "${startdir}/userspace/awdl_plist.py" "${lib}/awdl_plist.py"
+  install -Dm644 "${startdir}/userspace/awdl_schedule.py" "${lib}/awdl_schedule.py"
 
   install -Dm644 "${startdir}/packaging/org.omarchy.omdrop.policy" \
     "${pkgdir}/usr/share/polkit-1/actions/org.omarchy.omdrop.policy"
