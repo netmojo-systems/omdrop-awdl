@@ -48,14 +48,20 @@ def tlv(t, body): return bytes([t]) + struct.pack('<H', len(body)) + body
 CHFLAGS = {6: 0x2b, 44: 0x1d, 149: 0x1d, 151: 0x1d, 0: 0x00}
 
 # The advertised sequence MUST be the one the firmware dwells on: a Mac
-# schedules its unicast into the availability we advertise. awdl-up writes the
-# firmware's from the same table and knob files, so they cannot drift.
-from awdl_schedule import slots_for
+# schedules its unicast into the availability we advertise. awdl-up records the
+# schedule it gives the firmware, so that record, not the knob files, is advertised.
+from awdl_schedule import SHAPES, slots_for
 
 def configured_slots():
-    return slots_for(int(ident.knob('peer-chan', '44')),
-                     int(ident.knob('master-chan', '6')),
-                     ident.knob('chan-shape', 'dense'))
+    try:
+        with open(os.environ.get('AWDL_SCHEDULE_FILE', '/run/awdl-up.schedule')) as f:
+            record = f.read().split()
+    except OSError as e:
+        record = [f'no record: {e.strerror}']
+    if len(record) != 3 or not record[0].isdigit() or not record[1].isdigit() or record[2] not in SHAPES:
+        raise SystemExit(f"mkpsf: the firmware's schedule is unknown ({' '.join(record) or 'empty record'}); "
+                         "recreate awdl0 (Wi-Fi off and on) or reload the driver")
+    return slots_for(int(record[0]), int(record[1]), record[2])
 
 def chanseq(enc=1, chans=None, infra=None):
     if chans is None:

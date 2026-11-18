@@ -20,6 +20,9 @@ export OMDROP_CONF="$CONF"
 IF=awdl0
 RUN=/run/awdl-discoverable
 LOG=$RUN/log
+SYSNET=/sys/class/net
+# The schedule awdl-up gave the firmware, written by awdl-up and advertised by mkpsf.py.
+SCHEDULE=${AWDL_SCHEDULE_FILE:-/run/awdl-up.schedule}
 SUPERVISOR_UID=0
 # How many awdl=0/1 cycles to spend fighting a parked data path. Each costs
 # ~40 s. The park is ~50% per enable and streaky, so 3 is the point where the
@@ -334,7 +337,7 @@ election_state(){
   opmode=$(reply_file opmode) || { rm -f "$etree"; return 1; }
   iovar_get_len awdl_election_tree 42 "$etree" >/dev/null
   iovar_get_len awdl_opmode 12 "$opmode" >/dev/null
-  python3 - "$etree" "$opmode" "$(cat /sys/class/net/$IF/address)" "$(self_metric)" "$LIB" <<'PYX'
+  python3 - "$etree" "$opmode" "$(cat "$SYSNET/$IF/address")" "$(self_metric)" "$LIB" <<'PYX'
 import os, re, subprocess, sys
 etree, opmode, us, mine, lib = sys.argv[1:6]
 txt = subprocess.run([sys.executable, os.path.join(lib, 'awdl-election.py'), etree],
@@ -374,7 +377,8 @@ write_template(){
     log "template write suppressed ($CONF/no-template)"; return 0; }
   body=$(python3 "$LIB/mkpsf.py" --body --template --variant E \
            --master "$1" --sync "$2" --distance "$3" \
-           --master-metric "$4" --self-metric "$5")
+           --master-metric "$4" --self-metric "$5") && [[ -n $body ]] \
+    || { log "TEMPLATE NOT BUILT: mkpsf.py failed"; return 1; }
   # The iovar takes a u16 LE length header followed by the PSF body. The
   # working harness has always sent `le16(len) + body`; this function shipped
   # without the header once and every SET since was rejected EFAULT -- the
@@ -607,6 +611,11 @@ radio_up(){
     fi
     die 4 "AirDrop's Wi-Fi driver is not loaded, so this machine cannot be discovered. Restart to load it."
   fi
+  # Its schedule is advertised only as awdl-up recorded it; with none, it came from an older awdl-up or a cut-short write.
+  if [[ ! $(cat "$SCHEDULE" 2>/dev/null) =~ ^[0-9]+\ [0-9]+\ [a-z0-9]+$ ]]; then
+    set_reason no_awdl0
+    die 4 "AirDrop's radio interface needs restarting. Turn Wi-Fi off and back on, or restart."
+  fi
   # An awdl0 that already exists skips awdl-up, so check NetworkManager here
   # too: installed on a running system, the package's unmanaged setting is not
   # in force until NetworkManager rereads its configuration (issue 15). Before
@@ -754,10 +763,10 @@ else:
     print(f'chan_seq    unreadable ({len(b)} B)')
 PYX
   iovar_get_len awdl_stats 324 "$st0" >/dev/null
-  rx0=$(cat "/sys/class/net/$IF/statistics/rx_packets" 2>/dev/null || echo 0)
+  rx0=$(cat "$SYSNET/$IF/statistics/rx_packets" 2>/dev/null || echo 0)
   sleep "$secs"
   iovar_get_len awdl_stats 324 "$st1" >/dev/null
-  rx1=$(cat "/sys/class/net/$IF/statistics/rx_packets" 2>/dev/null || echo 0)
+  rx1=$(cat "$SYSNET/$IF/statistics/rx_packets" 2>/dev/null || echo 0)
   # Both directions. --rx hid aftx, and 04:5xZ that was the field in question:
   # a Mac only schedules unicast to a peer in its table, and its table is built
   # from our ACTION frames -- so "are we emitting any" is as important as what

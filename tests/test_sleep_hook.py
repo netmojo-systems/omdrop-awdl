@@ -301,7 +301,8 @@ class AwdlUpWhileSleepingTests(Harness):
         bin_ = Path(self.env["PATH"].split(":")[0])
         executable(bin_ / "iw", "#!/usr/bin/env bash\nprintf '%s\\n' 'Connected to c6:4f:d5:41:10:72 (on wlan0)' $'\\tfreq: 5220.0'\n")
         self.env.update(AWDL_STA="wlan0", AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"),
-                        OMDROP_CONF=str(self.stub / "conf"))
+                        OMDROP_CONF=str(self.stub / "conf"), AWDL_SCHEDULE_FILE=str(self.stub / "schedule"),
+                        AWDL_READBACK=str(self.stub / "readback"))
 
     def awdl_up(self):
         return subprocess.run(["unshare", "-r", str(self.lib / "awdl-up")], capture_output=True,

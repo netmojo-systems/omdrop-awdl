@@ -11,12 +11,20 @@ sys.path.insert(0, str(USERSPACE))
 import awdl_schedule  # noqa: E402
 
 
-def advertised(conf):
-    """mkpsf.chanseq() for a knob directory, from a child process on an interface every host has."""
+def run_mkpsf(conf, **extra):
+    """mkpsf.chanseq() with this configuration directory, from a child process on an interface every host has."""
     env = dict(os.environ, OMDROP_CONF=conf, OMDROP_AWDL_IFACE='lo', OMDROP_INFRA_IFACE='lo',
-               OMDROP_AWDL_HOST='test-host', PYTHONPATH=str(USERSPACE))
-    out = subprocess.run([sys.executable, '-c', 'import mkpsf; print(mkpsf.chanseq().hex())'],
-                         capture_output=True, text=True, env=env, check=True)
+               OMDROP_AWDL_HOST='test-host', PYTHONPATH=str(USERSPACE),
+               AWDL_SCHEDULE_FILE=str(Path(conf, 'no-record')))
+    env.update(extra)
+    return subprocess.run([sys.executable, '-c', 'import mkpsf; print(mkpsf.chanseq().hex())'],
+                          capture_output=True, text=True, env=env)
+
+
+def advertised(conf, **extra):
+    out = run_mkpsf(conf, **extra)
+    if out.returncode:
+        raise AssertionError(out.stderr)
     return bytes.fromhex(out.stdout.strip())
 
 
@@ -49,10 +57,10 @@ class Schedule(unittest.TestCase):
         for shape in awdl_schedule.SHAPES:
             for peer in (44, 149):
                 with self.subTest(shape=shape, peer=peer), tempfile.TemporaryDirectory() as conf:
-                    for name, value in (('peer-chan', peer), ('master-chan', 6), ('chan-shape', shape)):
-                        Path(conf, name).write_text(f'{value}\n')
+                    record = Path(conf, 'schedule')
+                    record.write_text(f'{peer} 6 {shape}\n')
                     fw = awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(peer, 6, shape))
-                    self.assertEqual(channels(advertised(conf)), channels(fw))
+                    self.assertEqual(channels(advertised(conf, AWDL_SCHEDULE_FILE=str(record))), channels(fw))
 
     def test_mirror_is_known_and_keeps_the_wifi_channel(self):
         self.assertEqual(awdl_schedule.slots_for(44, 6, 'mirror'),
@@ -75,6 +83,36 @@ class Schedule(unittest.TestCase):
         self.assertEqual(run('firmware', '44', '6', 'nosuch').returncode, 2)
         self.assertEqual(run('firmware', '44', '6', 'dense').stdout.strip(),
                          legacy_firmware(44, 6, 'dense').hex())
+
+    def test_the_wifi_band_picks_the_master_and_anything_unschedulable_keeps_6(self):
+        for infra, want in ((1, 6), (6, 6), (11, 6), (36, 149), (44, 149), (149, 149), (161, 149),
+                            (165, 6), (37, 6), (None, 6)):
+            with self.subTest(infra=infra):
+                self.assertEqual(awdl_schedule.default_master(infra), want)
+
+    def test_the_recorded_schedule_is_advertised_whatever_the_knobs_now_say(self):
+        with tempfile.TemporaryDirectory() as conf:
+            for name, value in (('peer-chan', 149), ('master-chan', 6), ('chan-shape', 'dense')):
+                Path(conf, name).write_text(f'{value}\n')
+            record = Path(conf, 'schedule')
+            record.write_text('44 149 mirror\n')
+            fw = awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(44, 149, 'mirror'))
+            self.assertEqual(channels(advertised(conf, AWDL_SCHEDULE_FILE=str(record))), channels(fw))
+
+    def test_an_unknown_firmware_schedule_is_not_advertised(self):
+        with tempfile.TemporaryDirectory() as conf:
+            for name, value in (('peer-chan', 44), ('master-chan', 6), ('chan-shape', 'mirror')):
+                Path(conf, name).write_text(f'{value}\n')
+            record = Path(conf, 'schedule')
+            for text in (None, 'incomplete\n', '', '44 149 nosuch\n'):
+                with self.subTest(record=text):
+                    record.unlink(missing_ok=True)
+                    if text is not None:
+                        record.write_text(text)
+                    out = run_mkpsf(conf, AWDL_SCHEDULE_FILE=str(record))
+                    self.assertNotEqual(out.returncode, 0)
+                    self.assertEqual(out.stdout, '')
+                    self.assertIn('reload the driver', out.stderr)
 
 
 if __name__ == '__main__':
