@@ -50,11 +50,8 @@ IFACE = "awdl0"
 # stop transmitting. A send waits, and advertises, for its own --wait.
 WAKE_SECONDS = 30
 WAKE_READY = 5.0       # how long to wait for the advertiser to say it registered
-# Android closes its AirDrop receiver about ten seconds after our BLE wake
-# stops, and a send has to outlast that: the person accepts it on the phone
-# first. So a send to a peer that announced its own port keeps the wake up
-# through the wait and until the sender exits, to the wait plus this (the
-# proven run, 30.4 MB, took 10 s).
+# A send's wake lasts at most its --wait plus this: receivers keep their
+# AirDrop server only while they hear it.
 # shortcut: a transfer that outlasts this loses the wake; restart the advert
 # before the ceiling if that ever matters.
 SEND_WAKE_SECONDS = 300
@@ -703,55 +700,35 @@ def main():
         print(" ".join(command(port)))
         return 0
 
-    # An iPhone does not keep an AirDrop server listening while it is merely
-    # discoverable: measured 2026-09-18, port 8770 refused instantly, was OPEN
-    # for seconds around other sharingd work, and was gone again a minute
-    # later. Two transfers landed by firing inside that window. A Mac in
-    # Everyone mode listens throughout and needs none of this.
-    #
-    # Waiting alone relied on something else waking the phone: the radar's
-    # name lookups do, but they stop when the panel closes, and choosing a file
-    # closes it. So the wait raises the same wake the lookups use, for as long
-    # as it waits, and stops it before the transfer starts.
-    #
-    # A peer that announced its own port (Android's Quick Share) is the
-    # exception: it shuts its receiver ten seconds after the wake stops and the
-    # person has to accept the file on it, so its wake runs until the sender
-    # exits, open port or not.
+    # One wake per send, from before its first knock until the sender exits or
+    # the wake's ceiling ends.
     announced = mac in PORTS
     with contextlib.ExitStack() as send:
-        if args.wake and announced:
+        if args.wake:
             send.enter_context(wake(args.wait + SEND_WAKE_SECONDS, "sending without a wake"))
         if args.wait > 0 and not listening(link_local(mac), port):
             print(f"waiting up to {args.wait:.0f}s for {mac} to start listening on "
                   f"{port}", file=sys.stderr)
             opened = False
-            with contextlib.ExitStack() as stack:
-                if args.wake and not announced:
-                    stack.enter_context(wake(args.wait, "waiting without a wake"))
-                deadline = time.monotonic() + args.wait
+            deadline = time.monotonic() + args.wait
+            reread = time.monotonic() + RESCAN_SECONDS
+            while time.monotonic() < deadline:
+                if listening(link_local(mac), port):
+                    opened = True
+                    break
+                time.sleep(1.0)
+                # A peer's port and the peer itself reach the table in
+                # either order, so one heard without a port may get one.
+                if announced or time.monotonic() < reread:
+                    continue
                 reread = time.monotonic() + RESCAN_SECONDS
-                while time.monotonic() < deadline:
-                    if listening(link_local(mac), port):
-                        opened = True
-                        break
-                    time.sleep(1.0)
-                    # A peer's port and the peer itself reach the table in
-                    # either order, so one heard without a port may get one.
-                    if announced or time.monotonic() < reread:
-                        continue
-                    reread = time.monotonic() + RESCAN_SECONDS
-                    try:
-                        peers()
-                    except HelperFailed:
-                        continue
-                    if mac in PORTS:
-                        announced, port = True, PORTS[mac]
-                        print(f"{mac} announced port {port}", file=sys.stderr)
-                        if args.wake:
-                            stack.close()        # one advert at a time
-                            send.enter_context(wake(deadline - time.monotonic() + SEND_WAKE_SECONDS,
-                                                    "sending without a wake"))
+                try:
+                    peers()
+                except HelperFailed:
+                    continue
+                if mac in PORTS:
+                    announced, port = True, PORTS[mac]
+                    print(f"{mac} announced port {port}", file=sys.stderr)
             if not opened:
                 print(f"{mac} never opened {port}; its AirDrop receiver has to be open "
                       f"(on an iPhone, open a share sheet or receive something to wake "

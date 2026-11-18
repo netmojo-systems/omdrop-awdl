@@ -83,7 +83,7 @@ class NameLookupTests(unittest.TestCase):
 
 
 class SendWaitTests(unittest.TestCase):
-    """A send that waits for a sleeping peer wakes it while it waits."""
+    """A send wakes its peer from before it waits until the sender exits."""
 
     MAC = "7e:49:49:fe:ea:4e"
 
@@ -126,13 +126,11 @@ class SendWaitTests(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 return self.stp.main()
 
-    def test_the_wake_is_up_while_waiting_and_down_before_the_transfer(self):
+    def test_the_wake_is_up_from_before_the_wait_until_the_transfer_ends(self):
         rc = self.main("--wait", "20", answers=[False, False, True])
         self.assertEqual(rc, 0)
-        names = [e[0] for e in self.events]
-        self.assertEqual(self.events[1], ("wake up", 20.0))
-        self.assertLess(names.index("wake up"), names.index("knock", 1))
-        self.assertLess(names.index("wake down"), names.index("send"))
+        self.assertEqual(self.events[0], ("wake up", 20.0 + self.stp.SEND_WAKE_SECONDS))
+        self.assertEqual(self.events[-2:], [("send",), ("wake down",)])
 
     def test_a_peer_that_never_opens_still_stops_the_wake(self):
         self.stp.time.monotonic = iter(range(0, 10000, 5)).__next__
@@ -141,9 +139,8 @@ class SendWaitTests(unittest.TestCase):
         self.assertIn(("wake down",), self.events)
         self.assertNotIn(("send",), self.events)
 
-    def test_no_wake_is_raised_with_no_wake_or_a_listening_peer(self):
+    def test_no_wake_is_raised_with_no_wake(self):
         self.main("--wait", "20", "--no-wake", answers=[False, True])
-        self.main("--wait", "20", answers=[True])
         self.assertNotIn("wake up", [e[0] for e in self.events])
 
 
