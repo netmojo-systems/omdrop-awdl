@@ -11,7 +11,7 @@
 # skips the build entirely (see dkms.conf.in).
 
 pkgname=brcmfmac-awdl-dkms
-pkgver=0.10.7
+pkgver=0.10.8
 pkgrel=1
 _asahitag=asahi-7.2.12-2
 pkgdesc="AWDL (AirDrop link layer) support for Apple Broadcom Wi-Fi (BCM4378, BCM4387, BCM4388): DKMS module and root helpers"
@@ -23,7 +23,7 @@ license=('GPL-2.0-only')
 # session invoke the one helper that needs root. The sender, airdrop-send.py,
 # draws its /Ask icon with Pillow and packs its /Upload with libarchive;
 # zeroconf and ifaddr are its mDNS browse, used when it runs without --direct.
-depends=('dkms' 'bash' 'python' 'iproute2' 'iputils'
+depends=('dkms' 'bash' 'python' 'iproute2' 'iputils' 'iw'
          'kmod' 'polkit' 'procps-ng' 'util-linux' 'systemd' 'keyutils'
          'python-libarchive-c' 'python-pillow' 'python-zeroconf' 'python-ifaddr')
 makedepends=()        # prepare() patches with patch(1), which base-devel has
@@ -78,7 +78,7 @@ source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz"
         "0019-wifi-brcmfmac-close-dynamic-netdevs-before-detach-un.patch")
 # The tarball's hash is filled in once its tag is pushed; the patches are
 # hashed here.
-sha256sums=('ff2e5ad14baa8fff9155481c66bc608263e51a8e922a2f30f9c212b31a528923'
+sha256sums=('371036f8e8414f868f70abb8c9b3f118130d6a3e9f231916b0a96cdfd12965b5'
             '0b78df75c28fff13fcd3521f98313acc20741d7f54e3f53757e7fad26a9ac123'
             '37e42830356a982cd68ef4b8455e1abfdac33f0de30702e7301ea3d18877c0ca'
             '6da0322a1193c5932d8496ba2d4c75ec5c9606bde7a01c0b7beea2f820c5ab78'
@@ -166,6 +166,7 @@ package() {
   install -Dm644 "${srcdir}/omdrop-awdl-${pkgver}/userspace/awdl_identity.py" "${lib}/awdl_identity.py"
   install -Dm644 "${srcdir}/omdrop-awdl-${pkgver}/userspace/awdl_debug.py" "${lib}/awdl_debug.py"
   install -Dm644 "${srcdir}/omdrop-awdl-${pkgver}/userspace/awdl_plist.py" "${lib}/awdl_plist.py"
+  install -Dm644 "${srcdir}/omdrop-awdl-${pkgver}/userspace/awdl_schedule.py" "${lib}/awdl_schedule.py"
 
   install -Dm644 "${srcdir}/omdrop-awdl-${pkgver}/packaging/org.omarchy.omdrop.policy" \
     "${pkgdir}/usr/share/polkit-1/actions/org.omarchy.omdrop.policy"
