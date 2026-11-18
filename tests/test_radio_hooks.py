@@ -944,6 +944,17 @@ printf '%s\\n' "${{answers[$n]}}"
         self.assertEqual(seq, awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(44, 6, "mirror")).hex())
         self.assertEqual((sync_master, applied), (6, "44 6 mirror"))
 
+    def test_a_master_that_cannot_be_chosen_refuses_rather_than_falling_back_to_6(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.wifi_up_without_awdl0()
+        planner = self.root / "awdl_schedule.py"
+        planner.write_text("import sys\nif sys.argv[1:2] == ['master']: sys.exit(1)\n" + planner.read_text())
+        self.wifi_reports(associated(5220))
+        result = self.reload("create")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("no master channel could be chosen", result.stdout)
+        self.assertEqual(self.radio_changes(), [])
+
     def test_a_schedule_that_cannot_be_recorded_is_never_written(self):
         self.stub.mkdir(parents=True, exist_ok=True)
         self.awdl0_appears_on_create()
