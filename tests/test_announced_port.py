@@ -209,7 +209,7 @@ class AnnouncedPortTests(unittest.TestCase):
         self.assertLess(self.names().index("wake up"), self.names().index("knock"))
         self.assertGreater(self.names().index("wake down"), self.names().index("send"))
 
-    def test_a_port_announced_during_the_wait_is_dialled_and_gets_the_send_wake(self):
+    def test_a_port_announced_during_the_wait_is_dialled_under_the_one_send_wake(self):
         # The phone is in the table before its port line: the first read has
         # no port, a later one does.
         self.stp.PORTS = {}
@@ -222,31 +222,31 @@ class AnnouncedPortTests(unittest.TestCase):
         self.stp.RESCAN_SECONDS = 0
         sent = []
         self.stp.subprocess = types.SimpleNamespace(
-            run=lambda cmd, **kw: sent.append(cmd) or types.SimpleNamespace(returncode=0))
+            run=lambda cmd, **kw: sent.append(cmd) or self.events.append(("send",))
+            or types.SimpleNamespace(returncode=0))
         rc, _ = self.main("--mac", ANDROID, "f", "--wait", "30",
                           listening=(False, False, False, True))
         self.assertEqual(rc, 0)
         self.assertTrue(sent[0][3].endswith("%awdl0]:35471"))
         self.assertEqual([e for e in self.events if e[0] == "knock"][-1], ("knock", 35471))
-        wakes = [e for e in self.events if e[0] == "wake up"]
-        self.assertEqual(wakes[0], ("wake up", 30))            # the Apple-style wait wake
-        self.assertGreater(wakes[1][1], self.stp.SEND_WAKE_SECONDS)
-        # The wait wake is down before the send wake goes up; the send wake is
-        # still up when the sender runs (it drops only after main returns).
-        self.assertLess(self.events.index(("wake down",)), self.events.index(wakes[1]))
-        self.assertEqual(self.names().count("wake down"), 2)
+        # One wake covers the wait and the send; it drops only after the sender has run.
+        self.assertEqual([e for e in self.events if e[0] == "wake up"],
+                         [("wake up", 30 + self.stp.SEND_WAKE_SECONDS)])
+        self.assertEqual(self.events[-2:], [("send",), ("wake down",)])
 
     def test_android_without_wake_raises_none(self):
         self.assertEqual(self.main("--mac", ANDROID, "f", "--no-wake")[0], 0)
         self.assertNotIn("wake up", self.names())
 
-    def test_an_apple_peer_that_is_listening_gets_no_wake_and_a_waiting_one_loses_it_before_the_send(self):
-        self.assertEqual(self.main("--mac", APPLE, "f", "--wait", "30")[0], 0)
-        self.assertNotIn("wake up", self.names())
-        self.events.clear()
-        self.assertEqual(self.main("--mac", APPLE, "f", "--wait", "30", listening=(False, True))[0], 0)
-        self.assertEqual(self.events[0], ("knock", 8770))
-        self.assertLess(self.names().index("wake down"), self.names().index("send"))
+    def test_an_apple_peer_keeps_the_wake_up_from_before_the_first_knock_until_the_send_ends(self):
+        for listening in ((True,), (False, True)):
+            with self.subTest(listening=listening):
+                self.events.clear()
+                self.assertEqual(self.main("--mac", APPLE, "f", "--wait", "30", listening=listening)[0], 0)
+                self.assertEqual(self.events[0], ("wake up", 30 + self.stp.SEND_WAKE_SECONDS))
+                self.assertEqual(self.events[1], ("knock", 8770))
+                self.assertEqual(self.events[-2:], [("send",), ("wake down",)])
+                self.assertEqual(self.names().count("wake up"), 1)
 
 
 if __name__ == "__main__":
