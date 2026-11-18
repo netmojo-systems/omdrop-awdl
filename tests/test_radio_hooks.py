@@ -157,6 +157,7 @@ RUN={self.run_dir}
 LOG=$RUN/log
 TRACE={self.stub}/awdl_trace
 SCHEDULE={self.stub}/schedule
+SYSNET={self.stub}/sysnet
 need_root(){{ :; }}
 driver_loaded(){{ [[ -e {self.stub}/driver ]]; }}
 ''')
@@ -171,6 +172,9 @@ driver_loaded(){{ [[ -e {self.stub}/driver ]]; }}
         (self.stub / "mkpsf.py.out").write_text("aabbccdd\n")
         # The schedule awdl-up recorded for the existing awdl0; a window refuses one without it.
         (self.stub / "schedule").write_text("44 6 mirror\n")
+        # awdl0's own address, so the hooks never read the host's interfaces.
+        (self.stub / "sysnet" / "awdl0").mkdir(parents=True)
+        (self.stub / "sysnet" / "awdl0" / "address").write_text("f6:d4:88:00:00:01\n")
 
     def hook(self, name, *args, hooks=None, umask=None):
         env = dict(os.environ, STUB=str(self.stub),
@@ -1001,7 +1005,9 @@ printf '%s\\n' "${{answers[$n]}}"
     def assert_advertiser_refuses(self):
         psf = subprocess.run([sys.executable, "-c", "import mkpsf; mkpsf.chanseq()"], capture_output=True, text=True,
                              env=dict(os.environ, AWDL_SCHEDULE_FILE=str(self.stub / "schedule"),
-                                      OMDROP_CONF=str(self.root / "conf"), PYTHONPATH=str(USERSPACE)))
+                                      OMDROP_CONF=str(self.root / "conf"), PYTHONPATH=str(USERSPACE),
+                                      OMDROP_AWDL_IFACE="lo", OMDROP_INFRA_IFACE="lo",
+                                      OMDROP_AWDL_HOST="test-host"))
         self.assertNotEqual(psf.returncode, 0)
         self.assertIn("schedule is unknown", psf.stderr)
 

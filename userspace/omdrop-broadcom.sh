@@ -20,6 +20,7 @@ export OMDROP_CONF="$CONF"
 IF=awdl0
 RUN=/run/awdl-discoverable
 LOG=$RUN/log
+SYSNET=/sys/class/net
 # The schedule awdl-up gave the firmware, written by awdl-up and advertised by mkpsf.py.
 SCHEDULE=${AWDL_SCHEDULE_FILE:-/run/awdl-up.schedule}
 SUPERVISOR_UID=0
@@ -336,7 +337,7 @@ election_state(){
   opmode=$(reply_file opmode) || { rm -f "$etree"; return 1; }
   iovar_get_len awdl_election_tree 42 "$etree" >/dev/null
   iovar_get_len awdl_opmode 12 "$opmode" >/dev/null
-  python3 - "$etree" "$opmode" "$(cat /sys/class/net/$IF/address)" "$(self_metric)" "$LIB" <<'PYX'
+  python3 - "$etree" "$opmode" "$(cat "$SYSNET/$IF/address")" "$(self_metric)" "$LIB" <<'PYX'
 import os, re, subprocess, sys
 etree, opmode, us, mine, lib = sys.argv[1:6]
 txt = subprocess.run([sys.executable, os.path.join(lib, 'awdl-election.py'), etree],
@@ -762,10 +763,10 @@ else:
     print(f'chan_seq    unreadable ({len(b)} B)')
 PYX
   iovar_get_len awdl_stats 324 "$st0" >/dev/null
-  rx0=$(cat "/sys/class/net/$IF/statistics/rx_packets" 2>/dev/null || echo 0)
+  rx0=$(cat "$SYSNET/$IF/statistics/rx_packets" 2>/dev/null || echo 0)
   sleep "$secs"
   iovar_get_len awdl_stats 324 "$st1" >/dev/null
-  rx1=$(cat "/sys/class/net/$IF/statistics/rx_packets" 2>/dev/null || echo 0)
+  rx1=$(cat "$SYSNET/$IF/statistics/rx_packets" 2>/dev/null || echo 0)
   # Both directions. --rx hid aftx, and 04:5xZ that was the field in question:
   # a Mac only schedules unicast to a peer in its table, and its table is built
   # from our ACTION frames -- so "are we emitting any" is as important as what
