@@ -374,7 +374,8 @@ write_template(){
     log "template write suppressed ($CONF/no-template)"; return 0; }
   body=$(python3 "$LIB/mkpsf.py" --body --template --variant E \
            --master "$1" --sync "$2" --distance "$3" \
-           --master-metric "$4" --self-metric "$5")
+           --master-metric "$4" --self-metric "$5") && [[ -n $body ]] \
+    || { log "TEMPLATE NOT BUILT: mkpsf.py failed"; return 1; }
   # The iovar takes a u16 LE length header followed by the PSF body. The
   # working harness has always sent `le16(len) + body`; this function shipped
   # without the header once and every SET since was rejected EFAULT -- the
