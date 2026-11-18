@@ -21,6 +21,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -29,6 +30,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 USERSPACE = ROOT / "userspace"
+sys.path.insert(0, str(USERSPACE))
+import awdl_schedule  # noqa: E402
 # The hooks that need root; `probe` is the one that must not.
 HOOKS = ("up", "identity", "tick", "peer-watch", "peers", "diag", "read", "trace")
 # Run-directory files core owns (backend contract, "Run directory").
@@ -872,6 +875,38 @@ printf '%s\\n' "${{answers[$n]}}"
         result = self.reload("create", AWDL_WAIT_CHAN="5")
         self.assertNotIn("schedule refused", result.stdout, result.stdout + result.stderr)
         self.assertIn("schedule set (mirror", result.stdout)
+
+    def created_schedule(self, mhz, master_conf=None):
+        """Create awdl0 with Wi-Fi associated on `mhz`; the chan_seq and sync_params master written."""
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.awdl0_appears_on_create()
+        conf = self.root / "conf"
+        conf.mkdir()
+        (conf / "chan-shape").write_text("mirror\n")
+        if master_conf:
+            (conf / "master-chan").write_text(f"{master_conf}\n")
+        self.wifi_reports(associated(mhz))
+        applied = self.stub / "master-chan"
+        result = self.reload("create", AWDL_MASTER_FILE=str(applied))
+        self.assertIn("schedule set (mirror", result.stdout, result.stdout + result.stderr)
+        sets = {c.split()[4]: c.split()[5] for c in (self.stub / "iovar.log").read_text().splitlines()
+                if c.split()[3:4] == ["set"]}
+        return sets["awdl_chan_seq"], int(sets["awdl_sync_params"][12:14], 16), applied.read_text().strip()
+
+    def test_5ghz_wifi_without_a_configured_master_runs_master_149(self):
+        seq, sync_master, applied = self.created_schedule(5220)
+        self.assertEqual(seq, awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(44, 149, "mirror")).hex())
+        self.assertEqual((sync_master, applied), (149, "149"))
+
+    def test_2_4ghz_wifi_without_a_configured_master_keeps_master_6(self):
+        seq, sync_master, applied = self.created_schedule(2437)
+        self.assertEqual(seq, awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(44, 6, "mirror")).hex())
+        self.assertEqual((sync_master, applied), (6, "6"))
+
+    def test_a_configured_master_wins_over_the_wifi_band(self):
+        seq, sync_master, applied = self.created_schedule(5220, master_conf=6)
+        self.assertEqual(seq, awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(44, 6, "mirror")).hex())
+        self.assertEqual((sync_master, applied), (6, "6"))
 
     def test_a_schedule_write_that_fails_removes_awdl0_however_the_rest_goes(self):
         self.stub.mkdir(parents=True, exist_ok=True)

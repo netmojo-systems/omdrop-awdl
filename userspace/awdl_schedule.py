@@ -6,6 +6,7 @@ availability we advertise, so the two must never differ.
 
   awdl_schedule.py check PEER MASTER SHAPE [INFRA]   exit 0, or a reason and exit 2
   awdl_schedule.py firmware PEER MASTER SHAPE        the awdl_chan_seq hex
+  awdl_schedule.py master [INFRA]                    the master channel when none is configured
 """
 import struct
 import sys
@@ -23,6 +24,16 @@ SHAPES = {
 # Operating class per channel, as the firmware's encoding 3 carries it.
 OPCLASS = {0: 0, 1: 81, 6: 81, 11: 81, 36: 128, 40: 128, 44: 128, 48: 128,
            149: 128, 153: 128, 157: 128, 161: 128}
+
+
+def band(ch):
+    """'2.4' or '5' for a channel this table can schedule; None for anything else, 6 GHz included."""
+    return {81: '2.4', 128: '5'}.get(OPCLASS.get(ch))
+
+
+def default_master(infra):
+    """149 while the Wi-Fi is on 5 GHz, else 6: on 2.4 GHz only the Wi-Fi channel fits the master slot."""
+    return 149 if band(infra) == '5' else 6
 
 
 def slots_for(peer, mch, shape):
@@ -50,6 +61,14 @@ def firmware_chanseq(slots):
 
 
 def main(argv):
+    if argv[:1] == ['master'] and len(argv) <= 2:
+        try:
+            infra = int(argv[1]) if len(argv) == 2 and argv[1] else None
+        except ValueError:
+            print('channels must be numbers', file=sys.stderr)
+            return 2
+        print(default_master(infra))
+        return 0
     if len(argv) < 4 or argv[0] not in ('check', 'firmware'):
         print(__doc__.strip(), file=sys.stderr)
         return 2

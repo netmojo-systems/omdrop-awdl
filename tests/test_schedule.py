@@ -11,10 +11,10 @@ sys.path.insert(0, str(USERSPACE))
 import awdl_schedule  # noqa: E402
 
 
-def advertised(conf):
+def advertised(conf, **extra):
     """mkpsf.chanseq() for a knob directory, from a child process on an interface every host has."""
     env = dict(os.environ, OMDROP_CONF=conf, OMDROP_AWDL_IFACE='lo', OMDROP_INFRA_IFACE='lo',
-               OMDROP_AWDL_HOST='test-host', PYTHONPATH=str(USERSPACE))
+               OMDROP_AWDL_HOST='test-host', PYTHONPATH=str(USERSPACE), **extra)
     out = subprocess.run([sys.executable, '-c', 'import mkpsf; print(mkpsf.chanseq().hex())'],
                          capture_output=True, text=True, env=env, check=True)
     return bytes.fromhex(out.stdout.strip())
@@ -75,6 +75,23 @@ class Schedule(unittest.TestCase):
         self.assertEqual(run('firmware', '44', '6', 'nosuch').returncode, 2)
         self.assertEqual(run('firmware', '44', '6', 'dense').stdout.strip(),
                          legacy_firmware(44, 6, 'dense').hex())
+
+    def test_the_wifi_band_picks_the_master_and_anything_unschedulable_keeps_6(self):
+        for infra, want in ((1, 6), (6, 6), (11, 6), (36, 149), (44, 149), (149, 149), (161, 149),
+                            (165, 6), (37, 6), (None, 6)):
+            with self.subTest(infra=infra):
+                self.assertEqual(awdl_schedule.default_master(infra), want)
+
+    def test_without_a_configured_master_the_advertised_sequence_follows_the_applied_one(self):
+        with tempfile.TemporaryDirectory() as conf:
+            Path(conf, 'peer-chan').write_text('44\n')
+            Path(conf, 'chan-shape').write_text('mirror\n')
+            applied = Path(conf, 'applied')
+            for master in (149, 6):
+                with self.subTest(master=master):
+                    applied.write_text(f'{master}\n')
+                    fw = awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(44, master, 'mirror'))
+                    self.assertEqual(channels(advertised(conf, AWDL_MASTER_FILE=str(applied))), channels(fw))
 
 
 if __name__ == '__main__':
