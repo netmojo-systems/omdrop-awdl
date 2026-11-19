@@ -1022,6 +1022,14 @@ printf '%s\\n' "${{answers[$n]}}"
             with self.subTest(mhz=mhz):
                 self.refused_before_the_unload(mhz)
 
+    def test_a_peer_chan_read_that_fails_after_printing_a_channel_stops_the_reload_before_the_unload(self):
+        conf = self.root / "conf"
+        conf.mkdir()
+        (conf / "peer-chan").write_text("44\n")
+        executable(self.bin / "cat", '#!/usr/bin/env bash\n[[ ${1:-} == */peer-chan ]] && { echo 44; exit 1; }\n'
+                                     f'exec {shutil.which("cat")} "$@"\n')
+        self.refused_before_the_unload(5220)
+
     def test_a_configured_peer_wins_over_the_wifi_channel(self):
         self.stub.mkdir(parents=True, exist_ok=True)
         self.wifi_up_without_awdl0()

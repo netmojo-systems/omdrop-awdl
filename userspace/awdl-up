@@ -62,7 +62,7 @@ MCH_CONF=$(cat "$CONF/master-chan" 2>/dev/null)
 MCH=${MCH_CONF:-6}
 # Only a missing peer-chan asks for the default: an empty or unreadable one is refused as written.
 PCH=44 PCH_SET=0
-[[ -e $CONF/peer-chan || -L $CONF/peer-chan ]] && { PCH_SET=1; PCH=$(cat "$CONF/peer-chan" 2>/dev/null); }
+[[ -e $CONF/peer-chan || -L $CONF/peer-chan ]] && { PCH_SET=1; PCH=$(cat "$CONF/peer-chan" 2>/dev/null) || PCH=; }
 SHAPE=$(cat "$CONF/chan-shape" 2>/dev/null || echo dense)
 
 log(){ printf '%s %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
