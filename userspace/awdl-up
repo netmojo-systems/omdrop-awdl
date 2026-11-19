@@ -30,7 +30,7 @@ IF=awdl0
 # The marker names the patched module currently loaded, for anything that wants
 # to know whether a reload is needed before trusting the AWDL iovars.
 MARK=/run/awdl-patched-loaded
-# The schedule given to the firmware, "PEER MASTER SHAPE": the table mkpsf.py advertises.
+# The schedule on the current awdl0, "PEER MASTER SHAPE": the table mkpsf.py advertises. Absent when no awdl0 carries one.
 APPLIED=${AWDL_SCHEDULE_FILE:-/run/awdl-up.schedule}
 # The packaged vendor file; the /etc copy is only written when neither exists,
 # so a machine that has edited the vendor setting keeps its edit.
@@ -125,6 +125,12 @@ b[20:24]=bytes([3,3,3,3]); b[30]=4; print(bytes(b).hex())")
   mv -f "$stage" "$APPLIED" \
     || { rm -f "$stage"; log "schedule set but not recorded in $APPLIED; it stays incomplete"; return 1; }
   log "schedule set ($SHAPE, peer $PCH, master $MCH)"
+}
+# Readers refuse a missing record as they refuse "incomplete", so clearing one never advertises anything.
+forget_schedule(){
+  [[ -e $APPLIED || -L $APPLIED ]] || return 0
+  if rm -f -- "$APPLIED"; then log "schedule record cleared: $1"
+  else log "the schedule record $APPLIED could not be cleared after $1"; fi
 }
 # The Wi-Fi interface's channel as a number, or nothing until it is associated:
 # mid-association `iw dev info` reports whatever channel the scan is on.
@@ -241,6 +247,7 @@ reload_driver(){
     modprobe -r "$mod" 2>/dev/null || log "modprobe -r $mod failed (in use?)"
   done
   [[ -d $SYSMOD/brcmutil ]] && log "brcmutil is still loaded; if it is not the copy on disk, brcmfmac will fail with unknown symbols"
+  [[ -d $SYSMOD/brcmfmac ]] || forget_schedule "brcmfmac was unloaded, and awdl0 and its schedule with it"
   sleep 2
   modprobe brcmfmac || { log "modprobe brcmfmac FAILED -- no Wi-Fi. Reboot to recover."; return 1; }
   log "brcmfmac reloaded; waiting for the Wi-Fi interface"
@@ -333,6 +340,7 @@ elif ip link show "$IF" >/dev/null 2>&1; then
   reconfigure_or_skip || exit 2
   exit 0
 fi
+ip link show "$IF" >/dev/null 2>&1 || forget_schedule "there is no $IF"
 nm_release
 
 wait_sta || { log "no Broadcom Wi-Fi interface after ${WAIT_STA}s -- is the patched driver installed?"; exit 4; }
