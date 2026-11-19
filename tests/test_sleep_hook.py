@@ -33,7 +33,7 @@ AWDL_UP = ROOT / "userspace" / "awdl-up"
 IP = r'''#!/usr/bin/env bash
 echo "ip $*" >> "$STUB/calls.log"
 case "$*" in
-  "link show awdl0") [[ -e $STUB/awdl0 ]] || exit 1 ;;
+  "link show awdl0") [[ -e $STUB/awdl0 ]] || { echo 'Device "awdl0" does not exist.' >&2; exit 1; } ;;
   "-d link show wlan0") [[ -e $STUB/marker-on-permaddr ]] && : > "$AWDL_SLEEP_MARKER" ;;
 esac
 exit 0

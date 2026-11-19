@@ -81,12 +81,14 @@ sys.exit(int(open(rc).read()) if os.path.exists(rc) else 0)
 '''
 
 # ip: awdl0 exists while $STUB/awdl0 does, and has a link-local address while
-# $STUB/linklocal does. Every `ip link set` is only logged.
+# $STUB/linklocal does. Every `ip link set` is only logged. An absent awdl0 is
+# reported as iproute2 reports it, which awdl-up needs before it treats it as gone.
+NO_AWDL0 = r'''{ echo 'Device "awdl0" does not exist.' >&2; exit 1; }'''
 IP = r'''#!/usr/bin/env bash
 echo "ip $*" >> "$STUB/ip.log"
 case "$*" in
   "link show awdl0")
-    [[ -e $STUB/awdl0 ]] || exit 1
+    [[ -e $STUB/awdl0 ]] || ''' + NO_AWDL0 + r'''
     echo "9: awdl0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP" ;;
   "-6 addr show dev awdl0 scope link")
     [[ -e $STUB/linklocal ]] && echo "    inet6 fe80::1/64 scope link" ;;
@@ -771,7 +773,7 @@ class ReloadTests(unittest.TestCase):
         executable(self.bin / "nmcli", "#!/usr/bin/env bash\nexit 0\n")
         executable(self.bin / "systemctl", "#!/usr/bin/env bash\nexit 0\n")
         # No Wi-Fi interface ever appears, so a successful load ends at exit 4.
-        executable(self.bin / "ip", "#!/usr/bin/env bash\nexit 1\n")
+        executable(self.bin / "ip", "#!/usr/bin/env bash\n" + NO_AWDL0 + "\n")
         # The Wi-Fi interface is associated on channel 44.
         executable(self.bin / "iw", f"#!/usr/bin/env bash\nprintf '%s\\n' '{associated(5220)}'\n")
         awdl_up = (USERSPACE / "awdl-up").read_text()
@@ -814,7 +816,7 @@ printf '%s\\n' "${{answers[$n]}}"
 
     def wifi_up_without_awdl0(self):
         """The Wi-Fi interface exists on its permanent MAC and awdl0 does not; record any create."""
-        executable(self.bin / "ip", '#!/usr/bin/env bash\n[[ " $* " == *" awdl0 "* ]] && exit 1\nexit 0\n')
+        executable(self.bin / "ip", '#!/usr/bin/env bash\n[[ " $* " == *" awdl0 "* ]] && ' + NO_AWDL0 + '\nexit 0\n')
         executable(self.root / "brcm_iovar.py", RECORD_IOVAR)
 
     def radio_changes(self):
@@ -923,6 +925,44 @@ printf '%s\\n' "${{answers[$n]}}"
                 self.assertEqual(result.returncode, rc, result.stdout + result.stderr)
                 self.assertIn("unloading brcmfmac", result.stdout)
                 self.assert_record_cleared()
+
+    def record_cannot_be_removed(self):
+        """`rm` fails on the schedule record and works on everything else."""
+        executable(self.bin / "rm", '#!/usr/bin/env bash\nfor a; do [[ $a == */schedule ]] && exit 1; done\n'
+                                    f'exec {shutil.which("rm")} "$@"\n')
+
+    def test_awdl0_that_cannot_be_looked_up_keeps_the_record_and_is_not_created(self):
+        self.recorded()
+        executable(self.root / "brcm_iovar.py", RECORD_IOVAR)
+        executable(self.bin / "ip", '#!/usr/bin/env bash\n[[ " $* " == *" awdl0 "* ]] && '
+                                    "{ echo 'Error: failed to read netlink reply' >&2; exit 1; }\nexit 0\n")
+        result = self.reload("create")
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn("could not tell whether awdl0 exists", result.stdout)
+        self.assertEqual(self.radio_changes(), [])
+        self.assert_record_kept()
+
+    def test_a_record_that_cannot_be_cleared_stops_the_create(self):
+        self.recorded()
+        self.wifi_up_without_awdl0()
+        self.record_cannot_be_removed()
+        result = self.reload("create")
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn("could not be cleared", result.stdout)
+        self.assertIn("not creating awdl0", result.stdout)
+        self.assertEqual(self.radio_changes(), [])
+
+    def test_a_record_that_cannot_be_cleared_after_the_unload_still_gets_wifi_back(self):
+        self.recorded()
+        self.wifi_up_without_awdl0()
+        self.record_cannot_be_removed()
+        result = self.reload()
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn("could not be cleared", result.stdout)
+        self.assertEqual((self.stub / "modprobe.log").read_text().splitlines()[-1], "modprobe brcmfmac")
+        self.assertIn("wlstub back", result.stdout)
+        self.assertIn("Wi-Fi is back", result.stdout)
+        self.assertEqual(self.radio_changes(), [])
 
     def test_wifi_back_on_a_channel_the_sequence_never_visits_creates_no_awdl0(self):
         self.recorded()
@@ -1123,7 +1163,7 @@ printf '%s\\n' "${{answers[$n]}}"
 
     def awdl0_appears_on_create(self):
         executable(self.bin / "ip", '#!/usr/bin/env bash\n'
-                   '[[ " $* " == *" awdl0 "* ]] && { [[ -e $STUB/awdl0.up ]]; exit; }\nexit 0\n')
+                   '[[ " $* " == *" awdl0 "* ]] && { [[ -e $STUB/awdl0.up ]] || ' + NO_AWDL0 + '; exit; }\nexit 0\n')
         executable(self.root / "brcm_iovar.py", RECORD_IOVAR)
 
 
