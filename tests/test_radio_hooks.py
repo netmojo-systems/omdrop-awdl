@@ -918,6 +918,8 @@ printf '%s\\n' "${{answers[$n]}}"
         conf = self.root / "conf"
         conf.mkdir()
         (conf / "peer-chan").write_text("149\n")
+        # A configured master is used as given; only the default follows the Wi-Fi channel.
+        (conf / "master-chan").write_text("149\n")
         result = self.reload()
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("never visits the Wi-Fi channel 44", result.stdout)
@@ -998,12 +1000,12 @@ printf '%s\\n' "${{answers[$n]}}"
     def test_wifi_back_on_a_channel_the_sequence_never_visits_creates_no_awdl0(self):
         self.recorded()
         self.wifi_up_without_awdl0()
-        # Checked on 44 before the unload; the link comes back on 153.
-        self.wifi_reports(associated(5220), associated(5765))
+        # Checked on 44 before the unload; the link comes back on 165, which no master can schedule.
+        self.wifi_reports(associated(5220), associated(5825))
         result = self.reload()
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("brcmfmac reloaded", result.stdout)
-        self.assertIn("never visits the Wi-Fi channel 153", result.stdout)
+        self.assertIn("never visits the Wi-Fi channel 165", result.stdout)
         self.assertEqual(self.radio_changes(), [])
         self.assert_record_cleared()
 
@@ -1013,6 +1015,8 @@ printf '%s\\n' "${{answers[$n]}}"
         conf = self.root / "conf"
         conf.mkdir()
         (conf / "peer-chan").write_text("149\n")
+        # A configured master is used as given; only the default follows the Wi-Fi channel.
+        (conf / "master-chan").write_text("149\n")
         result = self.reload("create")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("never visits the Wi-Fi channel 44", result.stdout)
@@ -1024,11 +1028,11 @@ printf '%s\\n' "${{answers[$n]}}"
     def test_a_channel_change_while_awdl0_is_created_removes_it_unconfigured(self):
         self.recorded()
         self.awdl0_appears_on_create()
-        # 44 while waiting and at the check before the create; 153 by the time the schedule is written.
-        self.wifi_reports(associated(5220), associated(5220), associated(5765))
+        # 44 while waiting and at the check before the create; 165, which no master can schedule, by the time the schedule is written.
+        self.wifi_reports(associated(5220), associated(5220), associated(5825))
         result = self.reload("create")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("never visits the Wi-Fi channel 153", result.stdout)
+        self.assertIn("never visits the Wi-Fi channel 165", result.stdout)
         calls = (self.stub / "iovar.log").read_text()
         self.assertIn("awdl-if create", calls)
         self.assertIn("awdl-if destroy", calls)
@@ -1039,7 +1043,8 @@ printf '%s\\n' "${{answers[$n]}}"
         self.recorded()
         self.awdl0_appears_on_create()
         (self.stub / "awdl0.up").touch()
-        self.wifi_reports(associated(5765))
+        # 165, which no master can schedule.
+        self.wifi_reports(associated(5825))
         result = self.reload("create")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("schedule NOT re-applied", result.stdout)

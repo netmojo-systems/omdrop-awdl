@@ -6,7 +6,7 @@ availability we advertise, so the two must never differ.
 
   awdl_schedule.py check PEER MASTER SHAPE [INFRA]   exit 0, or a reason and exit 2
   awdl_schedule.py firmware PEER MASTER SHAPE        the awdl_chan_seq hex
-  awdl_schedule.py master [INFRA]                    the master channel when none is configured
+  awdl_schedule.py master [INFRA [PEER SHAPE]]       the master channel when none is configured
   awdl_schedule.py peer MASTER SHAPE [INFRA]         the peer channel when none is configured
   awdl_schedule.py shape [INFRA]                     the shape when none is configured
 """
@@ -35,9 +35,20 @@ def band(ch):
     return {81: '2.4', 128: '5'}.get(OPCLASS.get(ch))
 
 
-def default_master(infra):
-    """149 while the Wi-Fi is on a 5 GHz channel in this table, else 6 as before."""
-    return 149 if band(infra) == '5' else 6
+def default_master(infra, peer=None, shape=None):
+    """149 while the Wi-Fi is on a 5 GHz channel in this table, else 6 as before.
+
+    Given the peer channel and shape, a 5 GHz default whose sequence would
+    never visit the Wi-Fi channel gives way to the Wi-Fi channel itself: Wi-Fi
+    on 157 or 36 with peer 44 gets that channel as master rather than a 149
+    schedule that check refuses. 2.4 GHz is left to default_peer, which moves
+    the peer slots to channel 1 or 11. Every default that already passed is kept.
+    """
+    mch = 149 if band(infra) == '5' else 6
+    if (band(infra) == '5' and peer is not None and shape in SHAPES
+            and infra not in slots_for(peer, mch, shape)):
+        return infra
+    return mch
 
 
 def default_shape(infra):
@@ -77,13 +88,17 @@ def firmware_chanseq(slots):
 
 
 def main(argv):
-    if argv[:1] in (['master'], ['shape']) and len(argv) <= 2:
+    if (argv[:1] == ['master'] and len(argv) in (1, 2, 4)) or (argv[:1] == ['shape'] and len(argv) <= 2):
         try:
-            infra = int(argv[1]) if len(argv) == 2 and argv[1] else None
+            infra = int(argv[1]) if len(argv) >= 2 and argv[1] else None
+            peer = int(argv[2]) if len(argv) == 4 else None
         except ValueError:
             print('channels must be numbers', file=sys.stderr)
             return 2
-        print(default_master(infra) if argv[0] == 'master' else default_shape(infra))
+        if argv[0] == 'shape':
+            print(default_shape(infra))
+        else:
+            print(default_master(infra, peer, argv[3] if len(argv) == 4 else None))
         return 0
     if argv[:1] == ['peer'] and len(argv) in (3, 4):
         try:

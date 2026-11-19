@@ -145,6 +145,33 @@ class Schedule(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.assertEqual(run(*bad).returncode, 2)
 
+    def test_a_wifi_channel_the_band_default_misses_becomes_the_master(self):
+        # Wi-Fi on 157 with the default peer 44: master 149 never visits 157 and was refused.
+        for infra, peer, shape, want in ((157, 44, 'dense', 157), (36, 44, 'mirror', 36), (36, 44, 'dense', 36),
+                                         (161, 44, 'full', 161), (153, 44, 'sparse', 153)):
+            with self.subTest(infra=infra, peer=peer, shape=shape):
+                mch = awdl_schedule.default_master(infra, peer, shape)
+                self.assertEqual(mch, want)
+                self.assertIsNone(awdl_schedule.problem(peer, mch, shape, infra))
+
+    def test_a_band_default_that_already_visits_the_wifi_channel_is_kept(self):
+        for infra, peer, shape, want in ((149, 44, 'dense', 149), (44, 44, 'dense', 149), (6, 44, 'dense', 6),
+                                         (157, 157, 'dense', 149), (165, 44, 'dense', 6), (37, 44, 'dense', 6),
+                                         (157, 44, 'nosuch', 149), (None, 44, 'dense', 6),
+                                         # 2.4 GHz misses are default_peer's to fix: master stays 6.
+                                         (1, 44, 'dense', 6), (11, 44, 'full', 6)):
+            with self.subTest(infra=infra, peer=peer, shape=shape):
+                self.assertEqual(awdl_schedule.default_master(infra, peer, shape), want)
+
+    def test_the_master_command_takes_the_peer_and_shape(self):
+        run = lambda *a: subprocess.run([sys.executable, str(USERSPACE / 'awdl_schedule.py'), *a],
+                                        capture_output=True, text=True)
+        self.assertEqual(run('master', '157', '44', 'dense').stdout.strip(), '157')
+        self.assertEqual(run('master', '157').stdout.strip(), '149')
+        self.assertEqual(run('master').stdout.strip(), '6')
+        self.assertEqual(run('master', '157', '44').returncode, 2)
+        self.assertEqual(run('master', '157', 'x', 'dense').returncode, 2)
+
     def test_the_recorded_schedule_is_advertised_whatever_the_knobs_now_say(self):
         with tempfile.TemporaryDirectory() as conf:
             for name, value in (('peer-chan', 149), ('master-chan', 6), ('chan-shape', 'dense')):
