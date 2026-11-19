@@ -167,8 +167,9 @@ schedule_ok(){
     log "schedule refused: the Wi-Fi interface reports no current channel to check the sequence against"
     return 1
   fi
-  # Without a configured master, the Wi-Fi band picks it (awdl_schedule.default_master).
-  [[ -n $MCH_CONF ]] || MCH=$(python3 "$LIB/awdl_schedule.py" master "$ch") \
+  # Without a configured master, the Wi-Fi band picks it, or the Wi-Fi channel
+  # itself when the band's would never visit it (awdl_schedule.default_master).
+  [[ -n $MCH_CONF ]] || MCH=$(python3 "$LIB/awdl_schedule.py" master "$ch" "$PCH" "$SHAPE") \
     || { log "schedule refused: no master channel could be chosen for the Wi-Fi channel $ch"; return 1; }
   # Without a peer-chan, Wi-Fi channel 1 or 11 takes the peer slots when 44 would miss it (awdl_schedule.default_peer).
   ((PCH_SET)) || PCH=$(python3 "$LIB/awdl_schedule.py" peer "$MCH" "$SHAPE" "$ch") \
