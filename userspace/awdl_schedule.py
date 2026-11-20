@@ -7,6 +7,7 @@ availability we advertise, so the two must never differ.
   awdl_schedule.py check PEER MASTER SHAPE [INFRA]   exit 0, or a reason and exit 2
   awdl_schedule.py firmware PEER MASTER SHAPE        the awdl_chan_seq hex
   awdl_schedule.py master [INFRA]                    the master channel when none is configured
+  awdl_schedule.py peer MASTER SHAPE [INFRA]         the peer channel when none is configured
 """
 import struct
 import sys
@@ -40,6 +41,13 @@ def slots_for(peer, mch, shape):
     return SHAPES[shape](peer, mch)
 
 
+def default_peer(infra, mch, shape):
+    """44 as before, unless that leaves Wi-Fi channel 1 or 11 unvisited: then that channel, as a Mac's own takes these slots."""
+    if infra in (1, 11) and shape in SHAPES and infra not in slots_for(44, mch, shape):
+        return infra
+    return 44
+
+
 def problem(peer, mch, shape, infra=None):
     """Why this schedule must not be written, or None."""
     if shape not in SHAPES:
@@ -68,6 +76,15 @@ def main(argv):
             print('channels must be numbers', file=sys.stderr)
             return 2
         print(default_master(infra))
+        return 0
+    if argv[:1] == ['peer'] and len(argv) in (3, 4):
+        try:
+            mch = int(argv[1])
+            infra = int(argv[3]) if len(argv) == 4 and argv[3] else None
+        except ValueError:
+            print('channels must be numbers', file=sys.stderr)
+            return 2
+        print(default_peer(infra, mch, argv[2]))
         return 0
     if len(argv) < 4 or argv[0] not in ('check', 'firmware'):
         print(__doc__.strip(), file=sys.stderr)

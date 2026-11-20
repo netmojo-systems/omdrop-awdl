@@ -191,8 +191,8 @@ Nothing is required. The helpers read the MAC, Wi-Fi interface, and hostname at 
 |---|---|---|
 | `infra-iface` | first Broadcom Wi-Fi interface | The interface `awdl0` is derived from |
 | `awdl-host` | `<short hostname>-awdl` | Name advertised over AWDL and answered over mDNS |
-| `master-chan` | `6` | Master availability-window channel |
-| `peer-chan` | `44` | Peer availability-window channel |
+| `master-chan` | `149` when Wi-Fi is on 5 GHz channel 36–48 or 149–161, otherwise `6` | Master availability-window channel |
+| `peer-chan` | `44`; Wi-Fi channel 1 or 11 instead, when the sequence would otherwise never visit it | Channel of the peer slots. The sequence must visit the Wi-Fi channel, or `awdl-up` refuses it. A file that is empty or unreadable is refused, not defaulted |
 | `chan-shape` | `dense` | Slot density: `sparse`, `dense`, `full`, `dense44`, or `mirror` |
 | `election-metric` | `100` | Election metric advertised and enforced |
 | `rssi-sync-threshold` | firmware default | dBm floor for adopting a peer as root; `-60` keeps the election to the room |

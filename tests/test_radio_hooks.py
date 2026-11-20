@@ -1027,18 +1027,23 @@ printf '%s\\n' "${{answers[$n]}}"
         self.assertNotIn("schedule refused", result.stdout, result.stdout + result.stderr)
         self.assertIn("schedule set (mirror", result.stdout)
 
-    def created_schedule(self, mhz, master_conf=None):
-        """Create awdl0 with Wi-Fi associated on `mhz`; the chan_seq and sync_params master written."""
+    def created_schedule(self, mhz, master_conf=None, shape="mirror", peer_conf=None):
+        """Create awdl0 with Wi-Fi associated on `mhz`; the chan_seq and sync_params master written.
+
+        `shape=None` leaves chan-shape unset, as a fresh install does."""
         self.stub.mkdir(parents=True, exist_ok=True)
         self.awdl0_appears_on_create()
         conf = self.root / "conf"
         conf.mkdir()
-        (conf / "chan-shape").write_text("mirror\n")
+        if shape:
+            (conf / "chan-shape").write_text(f"{shape}\n")
         if master_conf:
             (conf / "master-chan").write_text(f"{master_conf}\n")
+        if peer_conf:
+            (conf / "peer-chan").write_text(f"{peer_conf}\n")
         self.wifi_reports(associated(mhz))
         result = self.reload("create")
-        self.assertIn("schedule set (mirror", result.stdout, result.stdout + result.stderr)
+        self.assertIn(f"schedule set ({shape or 'dense'}", result.stdout, result.stdout + result.stderr)
         sets = {c.split()[4]: c.split()[5] for c in (self.stub / "iovar.log").read_text().splitlines()
                 if c.split()[3:4] == ["set"]}
         return sets["awdl_chan_seq"], int(sets["awdl_sync_params"][12:14], 16), (self.stub / "schedule").read_text().strip()
@@ -1067,6 +1072,105 @@ printf '%s\\n' "${{answers[$n]}}"
         result = self.reload("create")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("no master channel could be chosen", result.stdout)
+        self.assertEqual(self.radio_changes(), [])
+
+    def test_wifi_on_channel_1_with_nothing_configured_gets_a_schedule_that_visits_it(self):
+        seq, sync_master, applied = self.created_schedule(2412, shape=None)
+        self.assertEqual(seq, awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(1, 6, "dense")).hex())
+        self.assertEqual((sync_master, applied), (6, "1 6 dense"))
+
+    def test_wifi_on_channel_11_without_a_configured_peer_takes_the_peer_slots(self):
+        seq, sync_master, applied = self.created_schedule(2462)
+        self.assertEqual(seq, awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(11, 6, "mirror")).hex())
+        self.assertEqual((sync_master, applied), (6, "11 6 mirror"))
+
+    def test_a_master_configured_on_wifi_channel_1_keeps_the_peer_slots_on_44(self):
+        seq, sync_master, applied = self.created_schedule(2412, master_conf=1, shape=None)
+        self.assertEqual(seq, awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(44, 1, "dense")).hex())
+        self.assertEqual((sync_master, applied), (1, "44 1 dense"))
+
+    def test_a_peer_configured_on_the_wifi_channel_is_used_as_written(self):
+        seq, sync_master, applied = self.created_schedule(2412, peer_conf=1)
+        self.assertEqual(seq, awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(1, 6, "mirror")).hex())
+        self.assertEqual((sync_master, applied), (6, "1 6 mirror"))
+
+    def refused_before_the_unload(self, mhz):
+        self.wifi_reports(associated(mhz))
+        result = self.reload()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("schedule refused", result.stdout)
+        self.assertFalse((self.stub / "modprobe.log").exists())
+        self.assertTrue((self.sys / "brcmutil" / "stock").exists())
+
+    def test_a_peer_chan_that_is_empty_or_not_a_number_stops_the_reload_before_the_unload(self):
+        conf = self.root / "conf"
+        conf.mkdir()
+        # Wi-Fi is on 44 and then on 1: neither may fall back to a default.
+        for mhz in (5220, 2412):
+            for written in ("", "\n", "auto\n"):
+                with self.subTest(mhz=mhz, written=written):
+                    (conf / "peer-chan").write_text(written)
+                    self.refused_before_the_unload(mhz)
+
+    def test_a_peer_chan_that_cannot_be_read_stops_the_reload_before_the_unload(self):
+        (self.root / "conf" / "peer-chan").mkdir(parents=True)
+        for mhz in (5220, 2412):
+            with self.subTest(mhz=mhz):
+                self.refused_before_the_unload(mhz)
+
+    def test_a_peer_chan_read_that_fails_after_printing_a_channel_stops_the_reload_before_the_unload(self):
+        conf = self.root / "conf"
+        conf.mkdir()
+        (conf / "peer-chan").write_text("44\n")
+        executable(self.bin / "cat", '#!/usr/bin/env bash\n[[ ${1:-} == */peer-chan ]] && { echo 44; exit 1; }\n'
+                                     f'exec {shutil.which("cat")} "$@"\n')
+        self.refused_before_the_unload(5220)
+
+    def test_a_configured_peer_wins_over_the_wifi_channel(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.wifi_up_without_awdl0()
+        conf = self.root / "conf"
+        conf.mkdir()
+        (conf / "peer-chan").write_text("44\n")
+        self.wifi_reports(associated(2412))
+        result = self.reload("create")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("never visits the Wi-Fi channel 1", result.stdout)
+        self.assertEqual(self.radio_changes(), [])
+
+    def test_a_reload_on_wifi_channel_1_is_not_refused_before_the_unload(self):
+        self.wifi_reports(associated(2412))
+        result = self.reload()
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertIn("brcmfmac reloaded", result.stdout)
+
+    def test_wifi_back_on_channel_1_after_a_reload_gets_awdl0_on_a_schedule_that_visits_it(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.awdl0_appears_on_create()
+        # Checked on 44 before the unload; the link comes back on channel 1.
+        self.wifi_reports(associated(5220), associated(2412))
+        result = self.reload()
+        self.assertIn("schedule set (dense, peer 1, master 6)", result.stdout, result.stdout + result.stderr)
+        self.assertEqual((self.stub / "schedule").read_text().strip(), "1 6 dense")
+
+    def test_a_move_to_channel_1_while_awdl0_is_created_is_written_for_that_channel(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.awdl0_appears_on_create()
+        # 44 while waiting and at the check before the create; channel 1 by the time the schedule is written.
+        self.wifi_reports(associated(5220), associated(5220), associated(2412))
+        result = self.reload("create")
+        self.assertIn("schedule set (dense, peer 1, master 6)", result.stdout, result.stdout + result.stderr)
+        self.assertEqual((self.stub / "schedule").read_text().strip(), "1 6 dense")
+
+    def test_a_peer_that_cannot_be_chosen_refuses_rather_than_falling_back_to_44(self):
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.wifi_up_without_awdl0()
+        planner = self.root / "awdl_schedule.py"
+        planner.write_text("import sys\nif sys.argv[1:2] == ['peer']: sys.exit(1)\n" + planner.read_text())
+        self.wifi_reports(associated(2412))
+        result = self.reload("create")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("no peer channel could be chosen", result.stdout)
         self.assertEqual(self.radio_changes(), [])
 
     def test_a_schedule_that_cannot_be_recorded_is_never_written(self):

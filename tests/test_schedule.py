@@ -55,7 +55,7 @@ class Schedule(unittest.TestCase):
 
     def test_the_advertised_sequence_dwells_where_the_firmware_does_for_every_shape(self):
         for shape in awdl_schedule.SHAPES:
-            for peer in (44, 149):
+            for peer in (1, 11, 44, 149):
                 with self.subTest(shape=shape, peer=peer), tempfile.TemporaryDirectory() as conf:
                     record = Path(conf, 'schedule')
                     record.write_text(f'{peer} 6 {shape}\n')
@@ -89,6 +89,36 @@ class Schedule(unittest.TestCase):
                             (165, 6), (37, 6), (None, 6)):
             with self.subTest(infra=infra):
                 self.assertEqual(awdl_schedule.default_master(infra), want)
+
+    def test_only_wifi_channel_1_or_11_that_44_would_miss_takes_the_peer_slots(self):
+        for infra, mch, want in ((1, 6, 1), (11, 6, 11), (1, 149, 1), (11, 1, 11),
+                                 # A master on the Wi-Fi channel already visits it: the 44 slots stay.
+                                 (1, 1, 44), (11, 11, 44),
+                                 (6, 6, 44), (6, 149, 44), (3, 6, 44), (36, 149, 44), (44, 149, 44),
+                                 (149, 149, 44), (161, 149, 44), (165, 6, 44), (None, 6, 44)):
+            for shape in awdl_schedule.SHAPES:
+                with self.subTest(infra=infra, mch=mch, shape=shape):
+                    self.assertEqual(awdl_schedule.default_peer(infra, mch, shape), want)
+        self.assertEqual(awdl_schedule.default_peer(1, 6, 'no-such-shape'), 44)
+
+    def test_with_nothing_configured_every_shape_visits_wifi_channels_1_6_and_11_on_master_6(self):
+        for infra in (1, 6, 11):
+            for shape in awdl_schedule.SHAPES:
+                with self.subTest(infra=infra, shape=shape):
+                    mch = awdl_schedule.default_master(infra)
+                    self.assertEqual(mch, 6)
+                    peer = awdl_schedule.default_peer(infra, mch, shape)
+                    self.assertIsNone(awdl_schedule.problem(peer, mch, shape, infra=infra))
+
+    def test_the_peer_command_answers_for_a_master_and_shape_and_refuses_anything_else(self):
+        run = lambda *a: subprocess.run([sys.executable, str(USERSPACE / 'awdl_schedule.py'), 'peer', *a],
+                                        capture_output=True, text=True)
+        self.assertEqual(run('6', 'dense', '1').stdout.strip(), '1')
+        self.assertEqual(run('1', 'dense', '1').stdout.strip(), '44')
+        self.assertEqual(run('6', 'dense').stdout.strip(), '44')
+        for bad in (('x', 'dense', '1'), ('6', 'dense', 'x'), ('1',), ()):
+            with self.subTest(bad=bad):
+                self.assertEqual(run(*bad).returncode, 2)
 
     def test_the_recorded_schedule_is_advertised_whatever_the_knobs_now_say(self):
         with tempfile.TemporaryDirectory() as conf:
