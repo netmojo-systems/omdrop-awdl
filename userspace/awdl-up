@@ -30,7 +30,7 @@ IF=awdl0
 # The marker names the patched module currently loaded, for anything that wants
 # to know whether a reload is needed before trusting the AWDL iovars.
 MARK=/run/awdl-patched-loaded
-# The schedule given to the firmware, "PEER MASTER SHAPE": the table mkpsf.py advertises.
+# The schedule on the current awdl0, "PEER MASTER SHAPE": the table mkpsf.py advertises. Absent when no awdl0 carries one.
 APPLIED=${AWDL_SCHEDULE_FILE:-/run/awdl-up.schedule}
 # The packaged vendor file; the /etc copy is only written when neither exists,
 # so a machine that has edited the vendor setting keeps its edit.
@@ -126,6 +126,23 @@ b[20:24]=bytes([3,3,3,3]); b[30]=4; print(bytes(b).hex())")
     || { rm -f "$stage"; log "schedule set but not recorded in $APPLIED; it stays incomplete"; return 1; }
   log "schedule set ($SHAPE, peer $PCH, master $MCH)"
 }
+# Readers refuse a missing record as they refuse "incomplete", so clearing one never advertises anything.
+forget_schedule(){
+  [[ -e $APPLIED || -L $APPLIED ]] || return 0
+  if rm -f -- "$APPLIED" && [[ ! -e $APPLIED && ! -L $APPLIED ]]; then
+    log "schedule record cleared: $1"; return 0
+  fi
+  log "$APPLIED still claims a schedule after $1, and could not be cleared"
+  return 1
+}
+# present, absent or unknown. Only ip's own "does not exist" counts as absent, so a failed query never clears the record.
+awdl0_state(){
+  local err
+  if err=$(ip link show "$IF" 2>&1 >/dev/null); then echo present
+  elif [[ $err == *"\"$IF\" does not exist"* ]]; then echo absent
+  else echo unknown; fi
+}
+RECORD_STUCK=0
 # The Wi-Fi interface's channel as a number, or nothing until it is associated:
 # mid-association `iw dev info` reports whatever channel the scan is on.
 infra_channel(){
@@ -241,6 +258,8 @@ reload_driver(){
     modprobe -r "$mod" 2>/dev/null || log "modprobe -r $mod failed (in use?)"
   done
   [[ -d $SYSMOD/brcmutil ]] && log "brcmutil is still loaded; if it is not the copy on disk, brcmfmac will fail with unknown symbols"
+  [[ -d $SYSMOD/brcmfmac ]] || forget_schedule "brcmfmac was unloaded, and awdl0 and its schedule with it" \
+    || RECORD_STUCK=1
   sleep 2
   modprobe brcmfmac || { log "modprobe brcmfmac FAILED -- no Wi-Fi. Reboot to recover."; return 1; }
   log "brcmfmac reloaded; waiting for the Wi-Fi interface"
@@ -323,16 +342,24 @@ nm_release(){
 # sequence, transmitting where nobody listened.
 if (( RELOAD )); then
   schedule_ok || exit 2
+  # A record that could not be cleared is reported only after the Wi-Fi interface is back.
   reload_driver || exit $?
+  (( RECORD_STUCK )) && { log "not creating $IF while its schedule record is stale; Wi-Fi is back"; exit 3; }
   # awdl0 died with the module; fall through to the create path below, which
   # waits for the permanent MAC and writes the schedule into fresh firmware.
-elif ip link show "$IF" >/dev/null 2>&1; then
+fi
+IF_STATE=$(awdl0_state)
+if [[ $IF_STATE == present ]] && (( ! RELOAD )); then
   nm_release
   ip link set "$IF" up 2>/dev/null
   log "$IF already present: $(ip -br link show "$IF")"
   reconfigure_or_skip || exit 2
   exit 0
 fi
+case $IF_STATE in
+  absent) forget_schedule "there is no $IF" || { log "not creating $IF while its schedule record is stale"; exit 3; } ;;
+  unknown) log "could not tell whether $IF exists; not creating it, and its schedule record is left as it was"; exit 3 ;;
+esac
 nm_release
 
 wait_sta || { log "no Broadcom Wi-Fi interface after ${WAIT_STA}s -- is the patched driver installed?"; exit 4; }
