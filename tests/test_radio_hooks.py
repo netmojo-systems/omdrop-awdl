@@ -767,6 +767,9 @@ class ReloadTests(unittest.TestCase):
         self.bin.mkdir()
         executable(self.bin / "modprobe", MODPROBE)
         executable(self.bin / "sleep", "#!/usr/bin/env bash\nexit 0\n")
+        # awdl-up reloads NetworkManager's configuration when awdl0 is absent or managed: never the host's.
+        executable(self.bin / "nmcli", "#!/usr/bin/env bash\nexit 0\n")
+        executable(self.bin / "systemctl", "#!/usr/bin/env bash\nexit 0\n")
         # No Wi-Fi interface ever appears, so a successful load ends at exit 4.
         executable(self.bin / "ip", "#!/usr/bin/env bash\nexit 1\n")
         # The Wi-Fi interface is associated on channel 44.
@@ -819,6 +822,17 @@ printf '%s\\n' "${{answers[$n]}}"
         log = self.stub / "iovar.log"
         calls = log.read_text().splitlines() if log.exists() else []
         return [c for c in calls if " awdl-if " in f"{c} " or " set " in f"{c} "]
+
+    def test_a_create_never_reaches_an_nmcli_or_systemctl_outside_the_harness(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        for name in ("nmcli", "systemctl"):
+            executable(outside / name, f'#!/usr/bin/env bash\necho {name} >> "{self.root}/outside-calls"\nexit 0\n')
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.awdl0_appears_on_create()
+        result = self.reload("create", PATH=f"{self.bin}:{outside}:{os.environ['PATH']}")
+        self.assertIn("schedule set", result.stdout, result.stdout + result.stderr)
+        self.assertFalse((self.root / "outside-calls").exists())
 
     def test_the_stock_brcmutil_is_replaced_with_the_driver(self):
         result = self.reload()
