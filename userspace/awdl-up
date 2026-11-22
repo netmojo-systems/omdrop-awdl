@@ -384,7 +384,7 @@ if (( RELOAD )); then
 fi
 IF_STATE=$(awdl0_state)
 if [[ $IF_STATE == present ]] && (( REBUILD_STALE )); then
-  # The caller holds the start lock, so no window is live even while AWDL reads enabled.
+  # No window is live, even while AWDL reads enabled: a start against a live window extends it and never gets here.
   schedule_stale || exit 0
   log "the schedule on $IF ($(cat "$APPLIED" 2>/dev/null || echo unrecorded)) is not the one for Wi-Fi channel $(infra_channel); removing $IF to create it again"
   remove_awdl0 || { log "$IF could not be removed; its schedule stays as it was"; exit 2; }

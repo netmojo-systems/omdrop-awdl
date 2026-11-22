@@ -582,6 +582,11 @@ radio_up(){
   if awdl0_ready; then
     timeout --foreground 60 "$LIB/awdl-up" --rebuild-stale 2>&1 \
       | while IFS= read -r line; do log "awdl-up: ${line#*Z }"; done
+    # An awdl0 that outlived a failure may still carry the stale schedule.
+    if (( PIPESTATUS[0] )) && awdl0_ready; then
+      set_reason no_awdl0
+      die 4 "AirDrop's radio interface needs restarting. Turn Wi-Fi off and back on, or restart."
+    fi
   fi
   # awdl0 goes away for two very different reasons, and they used to print the
   # same sentence: "the AWDL driver is not loaded".

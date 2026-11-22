@@ -392,6 +392,17 @@ class UpTests(HookHarness):
         self.assertEqual(self.log("awdl-airdrop-adv.py.log"), "")
         self.assertNotIn("set awdl ", self.log("iovar.log"))
 
+    def test_a_window_is_not_opened_when_the_schedule_check_fails_and_awdl0_remains(self):
+        # awdl-up could not remove a stale awdl0, or could not check it at all.
+        self.interface()
+        (self.stub / "dmesg").write_text(TRANSMITTING)
+        (self.stub / "awdl-up.rc").write_text("2")
+        result = self.hook("up")
+        self.assertEqual(result.returncode, 4, result.stderr)
+        self.assertIn("needs restarting", result.stderr.splitlines()[-1])
+        self.assertNotIn("set awdl ", self.log("iovar.log"))
+        self.assertEqual(self.log("awdl-airdrop-adv.py.log"), "")
+
     def test_a_window_is_not_opened_on_an_awdl0_without_a_recorded_schedule(self):
         for record in (None, "incomplete\n"):
             with self.subTest(record=record):
@@ -1332,6 +1343,16 @@ printf '%s\\n' "${{answers[$n]}}"
         result = self.window_start("44 149 mac6g", 5180)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("schedule refused", result.stdout)
+        changes = self.radio_changes()
+        self.assertTrue([call for call in changes if call.endswith("awdl-if destroy")])
+        self.assertFalse([call for call in changes if "awdl-if create" in call])
+        self.assertFalse((self.stub / "schedule").exists())
+
+    def test_wifi_on_a_channel_no_schedule_visits_leaves_no_awdl0_and_says_why(self):
+        # After a switch to channel 165 the window used to open on the old schedule.
+        result = self.window_start("44 149 mac6g", 5825)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("never visits the Wi-Fi channel 165", result.stdout)
         changes = self.radio_changes()
         self.assertTrue([call for call in changes if call.endswith("awdl-if destroy")])
         self.assertFalse([call for call in changes if "awdl-if create" in call])
