@@ -20,6 +20,8 @@ SHAPES = {
     'full': lambda p, m: [p, p, 149, p, p, 149, p, p, m, p, 149, p, p, 149, p, p],
     'dense44': lambda p, m: [p, p, 149, p, p, p, p, p, m, p, 149, p, p, p, p, p],
     'mirror': lambda p, m: [p, 0, 149, 0, 0, 149, p, p, m, 0, 149, 0, 0, 149, p, p],
+    # A Mac on 6 GHz Wi-Fi advertises 149 at 0-3 and 9-11 (#79). Opt-in through chan-shape.
+    'mac6g': lambda p, m: [149, 149, 149, 149, p, 0, 0, p, m, 149, 149, 149, p, 0, 0, p],
 }
 
 # Operating class per channel, as the firmware's encoding 3 carries it.
