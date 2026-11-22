@@ -1039,6 +1039,15 @@ printf '%s\\n' "${{answers[$n]}}"
         self.assertNotIn("awdl_chan_seq", calls)
         self.assert_record_cleared()
 
+    def test_a_roam_from_1_to_44_between_the_checks_still_gets_the_44_default(self):
+        self.recorded()
+        self.awdl0_appears_on_create()
+        # 1 while waiting and at the check before the create; 44 by the time the schedule is written.
+        self.wifi_reports(associated(2412), associated(2412), associated(5220))
+        result = self.reload("create")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.stub / "schedule").read_text().strip(), "44 149 mac6g")
+
     def test_an_existing_awdl0_whose_schedule_is_refused_keeps_its_record(self):
         self.recorded()
         self.awdl0_appears_on_create()

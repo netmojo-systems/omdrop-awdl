@@ -173,6 +173,8 @@ schedule_ok(){
   # Without a chan-shape, the Wi-Fi band picks it (awdl_schedule.default_shape).
   ((SHAPE_SET)) || SHAPE=$(python3 "$LIB/awdl_schedule.py" shape "$ch") \
     || { log "schedule refused: no shape could be chosen for the Wi-Fi channel $ch"; return 1; }
+  # An earlier check may have moved the default peer; the master is picked from 44 every time.
+  ((PCH_SET)) || PCH=44
   # Without a configured master, the Wi-Fi band picks it, or the Wi-Fi channel
   # itself when the band's would never visit it (awdl_schedule.default_master).
   [[ -n $MCH_CONF ]] || MCH=$(python3 "$LIB/awdl_schedule.py" master "$ch" "$PCH" "$SHAPE") \
