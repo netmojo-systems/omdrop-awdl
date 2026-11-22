@@ -1,21 +1,7 @@
 #!/usr/bin/env bash
 # NetworkManager pre-down hook: end any AirDrop window and turn AWDL off
-# before Wi-Fi leaves a network (#74).
-#
-# On a BCM4387, joining a network on a channel outside AWDL's sequence while
-# AWDL is enabled leaves Wi-Fi unable to join anything until brcmfmac is
-# reloaded. Turning AWDL off after the failed join doesn't help; turning it
-# off before the join does. The boot-time warm-up and every window leave AWDL
-# enabled, so it goes off here, and the next window turns it on again.
-#
-# NetworkManager runs pre-down scripts, and waits for them, before it takes a
-# connection down on request: a switch to another network, a disconnect, or
-# Wi-Fi being turned off. It doesn't run them when the link is lost, so a
-# reconnect after that is not covered.
-#
-# It runs as root from NetworkManager-dispatcher, and its output goes to the
-# journal under that unit. A failure here must not hold up the switch, so
-# every step is bounded and best-effort and the hook always exits 0.
+# before Wi-Fi leaves a network on request (#74). Always exits 0: a failure
+# here must not hold up the switch.
 set -u
 
 LIB=/usr/lib/omdrop
