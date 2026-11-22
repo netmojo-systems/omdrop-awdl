@@ -1252,6 +1252,18 @@ printf '%s\\n' "${{answers[$n]}}"
         result = self.reapplied()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("schedule re-applied", result.stdout)
+        self.assertEqual((self.stub / "schedule").read_text().strip(), "44 149 mac6g")
+
+    def test_an_empty_chan_shape_is_refused_not_defaulted_and_a_written_one_wins(self):
+        conf = self.root / "conf"
+        conf.mkdir(parents=True, exist_ok=True)
+        (conf / "chan-shape").write_text("")
+        result = self.reapplied()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("unknown chan-shape ''", result.stdout)
+        (conf / "chan-shape").write_text("dense\n")
+        result = self.reapplied()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.stub / "schedule").read_text().strip(), "44 149 dense")
 
     def test_a_schedule_write_that_fails_removes_awdl0_however_the_rest_goes(self):
