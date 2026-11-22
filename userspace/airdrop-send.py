@@ -59,6 +59,33 @@ OP_TIMEOUT = 20.0
 # at the same size.
 MAX_RESPONSE_BYTES = 4 << 20
 
+# The Upload socket's cap on TCP's retransmission timeout (#79), as omdrop-core
+# sets it: through an AWDL blackout, retry every 1.3 s instead of backing off to minutes.
+UPLOAD_RTO_MAX_MS = 1300
+# Without it, the kernel's tcp_retries2 model gives a 1.3 s cap only about 18 s.
+UPLOAD_USER_TIMEOUT_MS = 120_000
+TCP_RTO_MAX_MS = getattr(socket, 'TCP_RTO_MAX_MS', 44)
+
+
+def bound_upload_retransmits(sock):
+    """The user timeout, then the RTO cap, both read back. If the cap can't be
+    set (a kernel before 6.15), the user timeout goes back to the kernel default
+    and OSError says why."""
+    try:
+        for name, value in ((socket.TCP_USER_TIMEOUT, UPLOAD_USER_TIMEOUT_MS),
+                            (TCP_RTO_MAX_MS, UPLOAD_RTO_MAX_MS)):
+            sock.setsockopt(socket.IPPROTO_TCP, name, value)
+            got = sock.getsockopt(socket.IPPROTO_TCP, name)
+            if got != value:
+                raise OSError(f'TCP option {name} reads back {got}, not {value}')
+    except OSError:
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, 0)
+        except OSError:
+            pass
+        raise
+
+
 # A whole answer, from the end of the request to the last byte of its body,
 # may take twice the connection's own timeout: once for the receiver to start
 # answering (a consent prompt, for an Ask), once more to finish. The timeout
@@ -503,6 +530,11 @@ class AirDropClient:
         application/x-cpio + gzip, which sharingd rejects (406 seen 09-07 the other
         way round). Same TLS connection as the Ask (post reuses http_conn)."""
         import libarchive
+        if self.http_conn is not None and self.http_conn.sock is not None:
+            try:
+                bound_upload_retransmits(self.http_conn.sock)
+            except OSError as e:
+                log.warning('upload keeps stock TCP retransmissions: %s', e)
         stream = io.BytesIO()
         cwd = os.getcwd()
         with libarchive.custom_writer(stream.write, 'cpio') as archive:
