@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# NetworkManager pre-down hook: end any AirDrop window and turn AWDL off
+# before Wi-Fi leaves a network (#74).
+#
+# On a BCM4387, joining a network on a channel outside AWDL's sequence while
+# AWDL is enabled leaves Wi-Fi unable to join anything until brcmfmac is
+# reloaded. Turning AWDL off after the failed join doesn't help; turning it
+# off before the join does. The boot-time warm-up and every window leave AWDL
+# enabled, so it goes off here, and the next window turns it on again.
+#
+# NetworkManager runs pre-down scripts, and waits for them, before it takes a
+# connection down on request: a switch to another network, a disconnect, or
+# Wi-Fi being turned off. It doesn't run them when the link is lost, so a
+# reconnect after that is not covered.
+#
+# It runs as root from NetworkManager-dispatcher, and its output goes to the
+# journal under that unit. A failure here must not hold up the switch, so
+# every step is bounded and best-effort and the hook always exits 0.
+set -u
+
+LIB=/usr/lib/omdrop
+IF=awdl0
+SYS=${AWDL_SYSFS:-/sys/class/net}
+log(){ printf 'omdrop-awdl pre-down: %s\n' "$*" >&2; }
+
+[[ ${2:-} == pre-down && -n ${1:-} ]] || exit 0
+# Only the Wi-Fi interface that shares its radio with awdl0.
+[[ -e $SYS/$IF && $SYS/$1/phy80211 -ef $SYS/$IF/phy80211 ]] || exit 0
+
+# Before AWDL goes off: a warm-up or a start still in its gate turns it back on.
+timeout 10 systemctl stop awdl-warmup.service 2>/dev/null
+if [[ -x $LIB/omdrop-discoverable ]]; then
+  timeout -k 2 20 "$LIB/omdrop-discoverable" stop >/dev/null || log "omdrop-discoverable stop exited $?"
+fi
+if timeout 8 python3 "$LIB/brcm_iovar.py" -i "$IF" set awdl 00000000 >/dev/null 2>&1; then
+  log "AWDL off before $1 goes down"
+else
+  log "could not turn AWDL off; if the next join fails, reload brcmfmac"
+fi
+exit 0
