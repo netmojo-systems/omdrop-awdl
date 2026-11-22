@@ -378,6 +378,20 @@ class UpTests(HookHarness):
         self.assertIn("nmcli general reload conf", self.log("nmcli.log"))
         self.assertIn("NetworkManager is managing it", result.stderr.splitlines()[-1])
 
+    def test_the_schedule_is_checked_against_the_wifi_channel_before_the_gate(self):
+        # awdl-up finds the schedule stale, removes awdl0, and cannot create it again.
+        self.interface()
+        (self.stub / "dmesg").write_text(TRANSMITTING)
+        executable(self.lib / "awdl-up", '#!/usr/bin/env bash\necho "$*" >> "$STUB/awdl-up.log"\n'
+                   '[[ ${1:-} == --rebuild-stale ]] && echo "12:00:00Z removing awdl0 to create it again"\n'
+                   'rm -f "$STUB/awdl0"\n')
+        result = self.hook("up")
+        self.assertEqual(result.returncode, 4, result.stderr)
+        self.assertEqual(self.log("awdl-up.log").splitlines(), ["--rebuild-stale", ""])
+        self.assertRegex(result.stderr, r"(?m)^\d\d:\d\d:\d\dZ awdl-up: removing awdl0 to create it again$")
+        self.assertEqual(self.log("awdl-airdrop-adv.py.log"), "")
+        self.assertNotIn("set awdl ", self.log("iovar.log"))
+
     def test_a_window_is_not_opened_on_an_awdl0_without_a_recorded_schedule(self):
         for record in (None, "incomplete\n"):
             with self.subTest(record=record):
@@ -731,7 +745,8 @@ touch "$sys/brcmutil/holders/brcmfmac"
 '''
 
 
-# brcm_iovar.py as awdl-up runs it (python3 PATH): records each call, makes awdl0 on a create,
+# brcm_iovar.py as awdl-up runs it (python3 PATH): records each call, makes awdl0 on a create and
+# removes it on a destroy unless $FAIL_DESTROY is set,
 # fails a SET of the iovar named in $FAIL_SET, SIGKILLs awdl-up (its grandparent, under
 # timeout) at a SET of the iovar named in $KILL_SET, and at a SET of the iovar named in
 # $UNSTAGE_SET removes awdl-up's staged schedule record so that committing it fails.
@@ -741,6 +756,11 @@ with open(os.path.join(stub, "iovar.log"), "a") as log:
     log.write("iovar " + " ".join(sys.argv[1:]) + "\n")
 if sys.argv[-2:] == ["awdl-if", "create"]:
     open(os.path.join(stub, "awdl0.up"), "w").close()
+if sys.argv[-2:] == ["awdl-if", "destroy"]:
+    if os.environ.get("FAIL_DESTROY"):
+        sys.exit(1)
+    if os.path.exists(os.path.join(stub, "awdl0.up")):
+        os.remove(os.path.join(stub, "awdl0.up"))
 if "set" in sys.argv and os.environ.get("FAIL_SET") in sys.argv:
     sys.exit(1)
 if "set" in sys.argv and os.environ.get("KILL_SET") in sys.argv:
@@ -1265,6 +1285,68 @@ printf '%s\\n' "${{answers[$n]}}"
         result = self.reapplied()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.stub / "schedule").read_text().strip(), "44 149 dense")
+
+    def window_start(self, record, mhz, **extra_env):
+        """`awdl-up --rebuild-stale`, as a window's start runs it, on an awdl0 that carries this schedule."""
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.awdl0_appears_on_create()
+        (self.stub / "awdl0.up").touch()
+        (self.stub / "schedule").write_text(record + "\n")
+        self.wifi_reports(associated(mhz) if mhz else ASSOCIATING)
+        return self.reload("--rebuild-stale", **extra_env)
+
+    def test_a_window_start_replaces_an_awdl0_whose_schedule_is_not_the_one_for_the_wifi_channel(self):
+        # Wi-Fi moved from channel 44 to channel 1 since awdl0 was created.
+        result = self.window_start("44 149 mac6g", 2412)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        changes = self.radio_changes()
+        off, destroy, create = (next(i for i, call in enumerate(changes) if call.endswith(tail))
+                                for tail in ("set awdl 00000000", "awdl-if destroy", "awdl-if create"))
+        self.assertLess(off, destroy)
+        self.assertLess(destroy, create)
+        self.assertEqual((self.stub / "schedule").read_text().strip(), "1 6 dense")
+
+    def test_a_window_start_leaves_alone_an_awdl0_on_the_schedule_for_the_wifi_channel(self):
+        result = self.window_start("44 149 mac6g", 5220)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.radio_changes(), [])
+        self.assertEqual((self.stub / "schedule").read_text().strip(), "44 149 mac6g")
+
+    def test_a_window_start_with_no_wifi_channel_leaves_awdl0_alone(self):
+        result = self.window_start("44 149 mac6g", None)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.radio_changes(), [])
+        self.assertEqual((self.stub / "schedule").read_text().strip(), "44 149 mac6g")
+
+    def test_an_awdl0_that_cannot_be_removed_keeps_its_schedule_and_is_not_created_over(self):
+        result = self.window_start("44 149 mac6g", 2412, FAIL_DESTROY="1")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertFalse([call for call in self.radio_changes() if "awdl-if create" in call])
+        self.assertEqual((self.stub / "schedule").read_text().strip(), "44 149 mac6g")
+
+    def test_a_stale_schedule_with_no_replacement_leaves_no_awdl0_as_a_boot_there_would(self):
+        # A configured master of 149 never visits Wi-Fi on channel 36, so nothing can be written.
+        conf = self.root / "conf"
+        conf.mkdir(parents=True, exist_ok=True)
+        (conf / "master-chan").write_text("149\n")
+        result = self.window_start("44 149 mac6g", 5180)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("schedule refused", result.stdout)
+        changes = self.radio_changes()
+        self.assertTrue([call for call in changes if call.endswith("awdl-if destroy")])
+        self.assertFalse([call for call in changes if "awdl-if create" in call])
+        self.assertFalse((self.stub / "schedule").exists())
+
+    def test_only_a_window_start_removes_an_awdl0_with_a_stale_schedule(self):
+        # awdl0.service restarted mid-session must not take a live interface away.
+        self.stub.mkdir(parents=True, exist_ok=True)
+        self.awdl0_appears_on_create()
+        (self.stub / "awdl0.up").touch()
+        (self.stub / "schedule").write_text("44 149 mac6g\n")
+        self.wifi_reports(associated(2412))
+        result = self.reload("create")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse([call for call in self.radio_changes() if "awdl-if" in call])
 
     def test_a_schedule_write_that_fails_removes_awdl0_however_the_rest_goes(self):
         self.stub.mkdir(parents=True, exist_ok=True)

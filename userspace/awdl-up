@@ -3,6 +3,8 @@
 #
 #   awdl-up            create + configure awdl0 (idempotent; safe to re-run)
 #   awdl-up --status   print what exists, exit 0 if awdl0 is ready
+#   awdl-up --rebuild-stale   for a window's start: replace an awdl0 whose schedule
+#                      is not the one for the Wi-Fi channel now; else change nothing
 #
 # Run by awdl0.service at boot. Root: every step is an nl80211 vendor dcmd on
 # the Wi-Fi interface or awdl0, or an `ip link` operation.
@@ -181,6 +183,25 @@ schedule_ok(){
   log "schedule refused: $why"
   return 1
 }
+# The record is not what a create would write for the Wi-Fi channel now. With
+# no channel there is nothing for a schedule to miss, so nothing is stale.
+schedule_stale(){
+  [[ $(infra_channel) =~ ^[0-9]+$ ]] || return 1
+  schedule_ok || return 0
+  [[ $(cat "$APPLIED" 2>/dev/null) != "$PCH $MCH $SHAPE" ]]
+}
+# Only a create writes a schedule once a template is loaded (see reconfigure_or_skip), so awdl0 goes first.
+remove_awdl0(){
+  ip link set "$IF" down 2>/dev/null
+  # The firmware refuses the destroy while AWDL is enabled, as in the sleep hook.
+  iovar_set "$IF" awdl 00000000 || log "could not turn AWDL off; the destroy will probably be refused"
+  timeout --foreground 8 python3 "$LIB/brcm_iovar.py" -i "$IF" awdl-if destroy 2>&1 | sed 's/^/  /'
+  for _ in {1..20}; do
+    [[ $(awdl0_state) == absent ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
 # Re-apply the channel schedule to an interface that already exists, when doing
 # so is safe. Skipping is normal and must never fail the unit; a failed apply does.
 reconfigure_or_skip(){
@@ -299,7 +320,11 @@ if [[ ${1:-} == --status ]]; then
   ip link show "$IF" >/dev/null 2>&1; exit $?
 fi
 RELOAD=0
-[[ ${1:-} == --reload ]] && RELOAD=1
+REBUILD_STALE=0
+case ${1:-} in
+  --reload) RELOAD=1 ;;
+  --rebuild-stale) REBUILD_STALE=1 ;;
+esac
 [[ $EUID -eq 0 ]] || { echo "needs root" >&2; exit 1; }
 
 # One awdl-up at a time: awdl0.service and awdl-warmup.service can both run it
@@ -358,6 +383,13 @@ if (( RELOAD )); then
   # waits for the permanent MAC and writes the schedule into fresh firmware.
 fi
 IF_STATE=$(awdl0_state)
+if [[ $IF_STATE == present ]] && (( REBUILD_STALE )); then
+  # The caller holds the start lock, so no window is live even while AWDL reads enabled.
+  schedule_stale || exit 0
+  log "the schedule on $IF ($(cat "$APPLIED" 2>/dev/null || echo unrecorded)) is not the one for Wi-Fi channel $(infra_channel); removing $IF to create it again"
+  remove_awdl0 || { log "$IF could not be removed; its schedule stays as it was"; exit 2; }
+  IF_STATE=absent
+fi
 if [[ $IF_STATE == present ]] && (( ! RELOAD )); then
   nm_release
   ip link set "$IF" up 2>/dev/null

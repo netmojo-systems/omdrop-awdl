@@ -577,6 +577,12 @@ nudge_peers(){
 # window's reason goes through set_reason; exits through die with 4 (no awdl0)
 # or 3 (parked).
 radio_up(){
+  # A network change since awdl0 was made can leave its schedule off the Wi-Fi
+  # channel. Whatever replaces it is logged; a create that fails is handled below.
+  if awdl0_ready; then
+    timeout --foreground 60 "$LIB/awdl-up" --rebuild-stale 2>&1 \
+      | while IFS= read -r line; do log "awdl-up: ${line#*Z }"; done
+  fi
   # awdl0 goes away for two very different reasons, and they used to print the
   # same sentence: "the AWDL driver is not loaded".
   #
