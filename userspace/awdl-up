@@ -60,10 +60,11 @@ STA=${AWDL_STA:-$(cat "$CONF/infra-iface" 2>/dev/null || true)}
 
 MCH_CONF=$(cat "$CONF/master-chan" 2>/dev/null)
 MCH=${MCH_CONF:-6}
-# Only a missing peer-chan asks for the default: an empty or unreadable one is refused as written.
+# Only a missing peer-chan or chan-shape asks for the default: an empty or unreadable one is refused as written.
 PCH=44 PCH_SET=0
 [[ -e $CONF/peer-chan || -L $CONF/peer-chan ]] && { PCH_SET=1; PCH=$(cat "$CONF/peer-chan" 2>/dev/null) || PCH=; }
-SHAPE=$(cat "$CONF/chan-shape" 2>/dev/null || echo dense)
+SHAPE=dense SHAPE_SET=0
+[[ -e $CONF/chan-shape || -L $CONF/chan-shape ]] && { SHAPE_SET=1; SHAPE=$(cat "$CONF/chan-shape" 2>/dev/null) || SHAPE=; }
 
 log(){ printf '%s %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
 # Every timeout here is `timeout --foreground`, for the reason given at
@@ -170,6 +171,9 @@ schedule_ok(){
   # Without a configured master, the Wi-Fi band picks it (awdl_schedule.default_master).
   [[ -n $MCH_CONF ]] || MCH=$(python3 "$LIB/awdl_schedule.py" master "$ch") \
     || { log "schedule refused: no master channel could be chosen for the Wi-Fi channel $ch"; return 1; }
+  # Without a chan-shape, the Wi-Fi band picks it (awdl_schedule.default_shape).
+  ((SHAPE_SET)) || SHAPE=$(python3 "$LIB/awdl_schedule.py" shape "$ch") \
+    || { log "schedule refused: no shape could be chosen for the Wi-Fi channel $ch"; return 1; }
   # Without a peer-chan, Wi-Fi channel 1 or 11 takes the peer slots when 44 would miss it (awdl_schedule.default_peer).
   ((PCH_SET)) || PCH=$(python3 "$LIB/awdl_schedule.py" peer "$MCH" "$SHAPE" "$ch") \
     || { log "schedule refused: no peer channel could be chosen for the Wi-Fi channel $ch"; return 1; }

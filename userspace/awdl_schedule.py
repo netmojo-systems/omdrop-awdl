@@ -8,6 +8,7 @@ availability we advertise, so the two must never differ.
   awdl_schedule.py firmware PEER MASTER SHAPE        the awdl_chan_seq hex
   awdl_schedule.py master [INFRA]                    the master channel when none is configured
   awdl_schedule.py peer MASTER SHAPE [INFRA]         the peer channel when none is configured
+  awdl_schedule.py shape [INFRA]                     the shape when none is configured
 """
 import struct
 import sys
@@ -20,7 +21,7 @@ SHAPES = {
     'full': lambda p, m: [p, p, 149, p, p, 149, p, p, m, p, 149, p, p, 149, p, p],
     'dense44': lambda p, m: [p, p, 149, p, p, p, p, p, m, p, 149, p, p, p, p, p],
     'mirror': lambda p, m: [p, 0, 149, 0, 0, 149, p, p, m, 0, 149, 0, 0, 149, p, p],
-    # A Mac on 6 GHz Wi-Fi advertises 149 at 0-3 and 9-11 (#79). Opt-in through chan-shape.
+    # A Mac on 6 GHz Wi-Fi advertises 149 at 0-3 and 9-11 (#79).
     'mac6g': lambda p, m: [149, 149, 149, 149, p, 0, 0, p, m, 149, 149, 149, p, 0, 0, p],
 }
 
@@ -37,6 +38,11 @@ def band(ch):
 def default_master(infra):
     """149 while the Wi-Fi is on a 5 GHz channel in this table, else 6 as before."""
     return 149 if band(infra) == '5' else 6
+
+
+def default_shape(infra):
+    """mac6g while the Wi-Fi is on 44, the channel it was measured on (#79); else dense as before."""
+    return 'mac6g' if infra == 44 else 'dense'
 
 
 def slots_for(peer, mch, shape):
@@ -71,13 +77,13 @@ def firmware_chanseq(slots):
 
 
 def main(argv):
-    if argv[:1] == ['master'] and len(argv) <= 2:
+    if argv[:1] in (['master'], ['shape']) and len(argv) <= 2:
         try:
             infra = int(argv[1]) if len(argv) == 2 and argv[1] else None
         except ValueError:
             print('channels must be numbers', file=sys.stderr)
             return 2
-        print(default_master(infra))
+        print(default_master(infra) if argv[0] == 'master' else default_shape(infra))
         return 0
     if argv[:1] == ['peer'] and len(argv) in (3, 4):
         try:

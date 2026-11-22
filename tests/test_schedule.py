@@ -97,6 +97,24 @@ class Schedule(unittest.TestCase):
             with self.subTest(infra=infra):
                 self.assertEqual(awdl_schedule.default_master(infra), want)
 
+    def test_wifi_on_44_picks_mac6g_and_anything_else_dense(self):
+        for infra, want in ((1, 'dense'), (6, 'dense'), (36, 'dense'), (44, 'mac6g'), (149, 'dense'),
+                            (161, 'dense'), (165, 'dense'), (37, 'dense'), (None, 'dense')):
+            with self.subTest(infra=infra):
+                self.assertEqual(awdl_schedule.default_shape(infra), want)
+        run = lambda *a: subprocess.run([sys.executable, str(USERSPACE / 'awdl_schedule.py'), 'shape', *a],
+                                        capture_output=True, text=True)
+        self.assertEqual(run('44').stdout.strip(), 'mac6g')
+        self.assertEqual(run().stdout.strip(), 'dense')
+        self.assertEqual(run('x').returncode, 2)
+
+    def test_with_nothing_configured_wifi_on_44_gets_a_writable_mac6g_schedule(self):
+        shape = awdl_schedule.default_shape(44)
+        self.assertEqual(shape, 'mac6g')
+        mch = awdl_schedule.default_master(44)
+        peer = awdl_schedule.default_peer(44, mch, shape)
+        self.assertIsNone(awdl_schedule.problem(peer, mch, shape, infra=44))
+
     def test_only_wifi_channel_1_or_11_that_44_would_miss_takes_the_peer_slots(self):
         for infra, mch, want in ((1, 6, 1), (11, 6, 11), (1, 149, 1), (11, 1, 11),
                                  # A master on the Wi-Fi channel already visits it: the 44 slots stay.

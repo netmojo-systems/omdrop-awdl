@@ -193,7 +193,7 @@ Nothing is required. The helpers read the MAC, Wi-Fi interface, and hostname at 
 | `awdl-host` | `<short hostname>-awdl` | Name advertised over AWDL and answered over mDNS |
 | `master-chan` | `149` when Wi-Fi is on 5 GHz channel 36–48 or 149–161, otherwise `6` | Master availability-window channel |
 | `peer-chan` | `44`; Wi-Fi channel 1 or 11 instead, when the sequence would otherwise never visit it | Channel of the peer slots. The sequence must visit the Wi-Fi channel, or `awdl-up` refuses it. A file that is empty or unreadable is refused, not defaulted |
-| `chan-shape` | `dense` | Slot pattern: `sparse`, `dense`, `full`, `dense44`, `mirror`, or `mac6g`. `mac6g` dwells on 149 where a Mac on 6 GHz Wi-Fi does; it fits Wi-Fi on channel 44 or 149 |
+| `chan-shape` | `mac6g` when Wi-Fi is on channel 44, otherwise `dense` | Slot pattern: `sparse`, `dense`, `full`, `dense44`, `mirror`, or `mac6g`. `mac6g` dwells on 149 where a Mac on 6 GHz Wi-Fi does. A file that is empty or unreadable is refused, not defaulted |
 | `election-metric` | `100` | Election metric advertised and enforced |
 | `rssi-sync-threshold` | firmware default | dBm floor for adopting a peer as root; `-60` keeps the election to the room |
 
