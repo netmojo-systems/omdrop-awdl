@@ -67,6 +67,13 @@ class Schedule(unittest.TestCase):
                          [44, 0, 149, 0, 0, 149, 44, 44, 6, 0, 149, 0, 0, 149, 44, 44])
         self.assertIsNone(awdl_schedule.problem(44, 6, 'mirror', infra=44))
 
+    def test_mac6g_dwells_on_149_where_a_6ghz_mac_does_and_keeps_the_wifi_channel(self):
+        self.assertEqual(awdl_schedule.slots_for(44, 149, 'mac6g'),
+                         [149, 149, 149, 149, 44, 0, 0, 44, 149, 149, 149, 149, 44, 0, 0, 44])
+        self.assertIsNone(awdl_schedule.problem(44, 149, 'mac6g', infra=44))
+        self.assertEqual(awdl_schedule.firmware_chanseq(awdl_schedule.slots_for(44, 149, 'mac6g')).hex(),
+                         '0f030003ffff95809580958095802c80000000002c8095809580958095802c80000000002c80')
+
     def test_a_schedule_that_never_visits_the_wifi_channel_is_refused(self):
         for shape in ('dense', 'full'):
             with self.subTest(shape=shape):
