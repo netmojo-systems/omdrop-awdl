@@ -918,8 +918,6 @@ printf '%s\\n' "${{answers[$n]}}"
         conf = self.root / "conf"
         conf.mkdir()
         (conf / "peer-chan").write_text("149\n")
-        # A configured master is used as given; only the default follows the Wi-Fi channel.
-        (conf / "master-chan").write_text("149\n")
         result = self.reload()
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("never visits the Wi-Fi channel 44", result.stdout)
@@ -1015,8 +1013,6 @@ printf '%s\\n' "${{answers[$n]}}"
         conf = self.root / "conf"
         conf.mkdir()
         (conf / "peer-chan").write_text("149\n")
-        # A configured master is used as given; only the default follows the Wi-Fi channel.
-        (conf / "master-chan").write_text("149\n")
         result = self.reload("create")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("never visits the Wi-Fi channel 44", result.stdout)
@@ -1350,10 +1346,11 @@ printf '%s\\n' "${{answers[$n]}}"
         self.assertEqual((self.stub / "schedule").read_text().strip(), "44 149 mac6g")
 
     def test_a_stale_schedule_with_no_replacement_leaves_no_awdl0_as_a_boot_there_would(self):
-        # A configured master of 149 never visits Wi-Fi on channel 36, so nothing can be written.
+        # A configured peer of 44 and master of 149 never visit Wi-Fi on channel 36, so nothing can be written.
         conf = self.root / "conf"
         conf.mkdir(parents=True, exist_ok=True)
         (conf / "master-chan").write_text("149\n")
+        (conf / "peer-chan").write_text("44\n")
         result = self.window_start("44 149 mac6g", 5180)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("schedule refused", result.stdout)
