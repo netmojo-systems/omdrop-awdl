@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# NetworkManager pre-down hook: end any AirDrop window and turn AWDL off
+# before Wi-Fi leaves a network on request (#74). Always exits 0: a failure
+# here must not hold up the switch.
+set -u
+
+LIB=/usr/lib/omdrop
+IF=awdl0
+SYS=${AWDL_SYSFS:-/sys/class/net}
+SLEEPING=${AWDL_SLEEP_MARKER:-/run/awdl-up.sleeping}
+START_LOCK=${AWDL_START_LOCK:-/run/awdl-discoverable/start.lock}
+# omdrop-core takes up to 7 s to stop the `up` hook of a cancelled start.
+START_WAIT=${AWDL_PRE_DOWN_START_WAIT:-15}
+log(){ printf 'omdrop-awdl pre-down: %s\n' "$*" >&2; }
+
+[[ ${2:-} == pre-down && -n ${1:-} ]] || exit 0
+# Only the Wi-Fi interface that shares its radio with awdl0.
+[[ -e $SYS/$IF && $SYS/$1/phy80211 -ef $SYS/$IF/phy80211 ]] || exit 0
+# The sleep hook is at work and holds the start lock: leave it alone.
+[[ -e $SLEEPING ]] && exit 0
+
+# Every other process with the start lock open, as the sleep hook finds them.
+lock_holders(){
+  find /proc/[0-9]*/fd -maxdepth 1 -lname "$START_LOCK" 2>/dev/null \
+    | awk -F/ -v self="$$" '$3 != self { print $3 }' | sort -u
+}
+
+timeout 10 systemctl stop awdl-warmup.service 2>/dev/null
+# Only a gate turns AWDL on, and it runs under the start lock, so the lock is
+# held from here to exit. Opened read-only: root creates and follows nothing.
+if [[ -f $START_LOCK && ! -L $START_LOCK ]] && exec 8<"$START_LOCK" && ! flock -n 8; then
+  mapfile -t holders < <(lock_holders 8<&-)
+  # TERM, not KILL: omdrop-core stops its `up` hook's gate only when it is told to.
+  (( ${#holders[@]} )) && kill -TERM "${holders[@]}" 2>/dev/null
+  flock -w "$START_WAIT" 8 || log "a start kept $START_LOCK for $START_WAIT s; it may turn AWDL back on"
+fi
+if [[ -x $LIB/omdrop-discoverable ]]; then
+  timeout -k 2 20 "$LIB/omdrop-discoverable" stop >/dev/null 8<&- || log "omdrop-discoverable stop exited $?"
+fi
+if timeout 8 python3 "$LIB/brcm_iovar.py" -i "$IF" set awdl 00000000 >/dev/null 2>&1 8<&-; then
+  log "AWDL off before $1 goes down"
+else
+  log "could not turn AWDL off; if the next join fails, reload brcmfmac"
+fi
+exit 0

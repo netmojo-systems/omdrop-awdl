@@ -32,7 +32,7 @@ depends=('dkms' 'linux-asahi-headers' 'bash' 'python' 'iproute2' 'iputils' 'iw'
          'kmod' 'polkit' 'procps-ng' 'util-linux' 'systemd' 'keyutils'
          'python-libarchive-c' 'python-pillow' 'python-zeroconf' 'python-ifaddr')
 makedepends=()        # prepare() patches with patch(1), which base-devel has
-optdepends=('networkmanager: keeps awdl0 unmanaged and settles the Wi-Fi MAC before awdl0 is derived from it'
+optdepends=('networkmanager: keeps awdl0 unmanaged, settles the Wi-Fi MAC before awdl0 is derived from it, and turns AWDL off before a network switch'
             # Naming a peer wakes it with a BLE Continuity advert, so these
             # are what `send-to-peer --list --names` needs to reach a device
             # set to Contacts Only. Still optional: without them the lookup
@@ -145,6 +145,9 @@ package() {
   # Ends any window and removes awdl0 before suspend or hibernate (#67).
   install -Dm755 "${startdir}/packaging/omdrop-awdl-sleep" \
     "${pkgdir}/usr/lib/systemd/system-sleep/omdrop-awdl"
+  # Ends any window and turns AWDL off before Wi-Fi leaves a network (#74).
+  install -Dm755 "${startdir}/packaging/omdrop-awdl-nm-pre-down" \
+    "${pkgdir}/usr/lib/NetworkManager/dispatcher.d/pre-down.d/50-omdrop-awdl"
   # Vendor directories, not /etc: both are read after the package's own copy is
   # in place, and both leave an /etc override to the person running the machine.
   install -Dm644 "${startdir}/packaging/brcmfmac-awdl.conf" \
