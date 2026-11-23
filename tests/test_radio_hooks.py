@@ -696,7 +696,8 @@ class ProcessGroupTests(HookHarness):
         env = dict(os.environ, STUB=str(self.stub), PATH=f"{self.bin}:{os.environ['PATH']}",
                    OMDROP_CONF=str(self.root / "conf"), AWDL_STA="wlstub",
                    AWDL_UP_LOCK=str(self.stub / "awdl-up.lock"),
-                   AWDL_CREATE_LOCK=str(self.stub / "awdl-up.create.lock"))
+                   AWDL_CREATE_LOCK=str(self.stub / "awdl-up.create.lock"),
+                   AWDL_SCHEDULE_FILE=str(self.stub / "schedule"))
         hook = subprocess.Popen([str(self.lib / "radio" / "up")], stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, env=env, cwd="/", start_new_session=True)
         self.addCleanup(hook.wait)
