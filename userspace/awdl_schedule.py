@@ -50,8 +50,8 @@ def slots_for(peer, mch, shape):
 
 
 def default_peer(infra, mch, shape):
-    """44 as before, unless that leaves Wi-Fi channel 1 or 11 unvisited: then that channel, as a Mac's own takes these slots."""
-    if infra in (1, 11) and shape in SHAPES and infra not in slots_for(44, mch, shape):
+    """44 as before, unless that leaves Wi-Fi channel 1, 11 or a 5 GHz one unvisited: then that channel, as a Mac's own takes these slots."""
+    if (infra in (1, 11) or band(infra) == '5') and shape in SHAPES and infra not in slots_for(44, mch, shape):
         return infra
     return 44
 

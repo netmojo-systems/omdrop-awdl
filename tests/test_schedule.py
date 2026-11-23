@@ -115,12 +115,13 @@ class Schedule(unittest.TestCase):
         peer = awdl_schedule.default_peer(44, mch, shape)
         self.assertIsNone(awdl_schedule.problem(peer, mch, shape, infra=44))
 
-    def test_only_wifi_channel_1_or_11_that_44_would_miss_takes_the_peer_slots(self):
+    def test_only_a_wifi_channel_that_44_would_miss_takes_the_peer_slots(self):
         for infra, mch, want in ((1, 6, 1), (11, 6, 11), (1, 149, 1), (11, 1, 11),
+                                 (36, 149, 36), (161, 149, 161), (157, 6, 157),
                                  # A master on the Wi-Fi channel already visits it: the 44 slots stay.
-                                 (1, 1, 44), (11, 11, 44),
-                                 (6, 6, 44), (6, 149, 44), (3, 6, 44), (36, 149, 44), (44, 149, 44),
-                                 (149, 149, 44), (161, 149, 44), (165, 6, 44), (None, 6, 44)):
+                                 (1, 1, 44), (11, 11, 44), (36, 36, 44),
+                                 (6, 6, 44), (6, 149, 44), (3, 6, 44), (44, 149, 44),
+                                 (149, 149, 44), (165, 6, 44), (165, 149, 44), (52, 149, 44), (None, 6, 44)):
             for shape in awdl_schedule.SHAPES:
                 with self.subTest(infra=infra, mch=mch, shape=shape):
                     self.assertEqual(awdl_schedule.default_peer(infra, mch, shape), want)
@@ -134,6 +135,20 @@ class Schedule(unittest.TestCase):
                     self.assertEqual(mch, 6)
                     peer = awdl_schedule.default_peer(infra, mch, shape)
                     self.assertIsNone(awdl_schedule.problem(peer, mch, shape, infra=infra))
+
+    def test_with_nothing_configured_a_5ghz_wifi_channel_keeps_master_149_and_takes_the_peer_slots(self):
+        # A Mac on another channel only hears sync frames on 6, 44 and 149: the master never follows the Wi-Fi.
+        for infra in (36, 40, 48, 153, 157, 161):
+            with self.subTest(infra=infra):
+                shape = awdl_schedule.default_shape(infra)
+                mch = awdl_schedule.default_master(infra)
+                peer = awdl_schedule.default_peer(infra, mch, shape)
+                self.assertEqual((peer, mch), (infra, 149))
+                self.assertIsNone(awdl_schedule.problem(peer, mch, shape, infra=infra))
+        for infra in (165, 52, 100):
+            with self.subTest(infra=infra):
+                mch = awdl_schedule.default_master(infra)
+                self.assertIsNotNone(awdl_schedule.problem(awdl_schedule.default_peer(infra, mch, 'dense'), mch, 'dense', infra=infra))
 
     def test_the_peer_command_answers_for_a_master_and_shape_and_refuses_anything_else(self):
         run = lambda *a: subprocess.run([sys.executable, str(USERSPACE / 'awdl_schedule.py'), 'peer', *a],
